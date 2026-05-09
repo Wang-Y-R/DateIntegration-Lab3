@@ -1,3 +1,6 @@
+# Maven
+target/
+
 # IDE
 .idea/
 *.iml
@@ -12,3 +15,4 @@ Thumbs.db
 
 # Misc
 skills-lock.json
+
