@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+    <xs:simpleType name="scoreType">
+        <xs:restriction base="xs:unsignedByte">
+            <xs:maxInclusive value="5"/>
+        </xs:restriction>
+    </xs:simpleType>
+    <xs:element name="classes">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="class" maxOccurs="unbounded" minOccurs="1">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="id" type="xs:string"/>
+                            <xs:element name="name">
+                                <xs:simpleType>
+                                    <xs:restriction base="xs:string">
+                                        <xs:maxLength value="40"/>
+                                    </xs:restriction>
+                                </xs:simpleType>
+                            </xs:element>
+                            <xs:element name="time" type="xs:unsignedByte"/>
+                            <xs:element name="score" type="scoreType"/>
+                            <xs:element name="teacher">
+                                <xs:simpleType>
+                                    <xs:restriction base="xs:string">
+                                        <xs:maxLength value="20"/>
+                                    </xs:restriction>
+                                </xs:simpleType>
+                            </xs:element>
+                            <xs:element name="location">
+                                <xs:simpleType>
+                                    <xs:restriction base="xs:string">
+                                        <xs:maxLength value="40"/>
+                                    </xs:restriction>
+                                </xs:simpleType>
+                            </xs:element>
+                        </xs:sequence>
+                    </xs:complexType>
+                </xs:element>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+</xs:schema>
