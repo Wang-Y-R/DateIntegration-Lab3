@@ -7,7 +7,7 @@
 - **Python 3.13**
 - **Flask** — Web 框架
 - **lxml** — XML 解析、XSD 校验、XSLT 转换
-- **SQLite** — 本地数据库
+- **SQLite** — 本地数据库（Python 内置，无需额外安装）
 - **uv** — 依赖管理
 
 ## 安装依赖
@@ -19,7 +19,7 @@ cd server-A
 uv sync
 ```
 
-会自动创建虚拟环境并安装 Flask、lxml、requests 等依赖。
+会自动创建虚拟环境并安装 Flask、lxml、requests 等依赖。不需要单独安装数据库，SQLite 由 Python 标准库自带。
 
 ## 运行
 
