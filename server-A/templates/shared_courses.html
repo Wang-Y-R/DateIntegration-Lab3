@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}院系A教务系统 - 跨系选课{% endblock %}
+{% block page_title %}跨系选课{% endblock %}
+
+{% block content %}
+{% if message %}
+<div class="alert alert-success">{{ message }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<div class="card mb-6">
+    <div class="card-header">跨系选课说明</div>
+    <div class="card-body">
+        <p style="color: var(--gray-600); line-height: 1.8;">
+            跨系选课功能通过集成服务器实现，允许您选修其他院系（院系B、院系C）提供的共享课程。
+            请输入目标院系和课程编号进行选课。目标院系课程必须已设为共享状态方可选课。
+        </p>
+    </div>
+</div>
+
+<div class="card mb-6">
+    <div class="card-header">提交跨系选课</div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('choose_cross_course') }}">
+            <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 16px; align-items: end;">
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label for="target_system">目标院系</label>
+                    <select id="target_system" name="target_system" class="form-control" required>
+                        <option value="">请选择院系</option>
+                        <option value="B">院系B（计算机学院）</option>
+                        <option value="C">院系C（信息学院）</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label for="course_id">课程编号</label>
+                    <input type="text" id="course_id" name="course_id" class="form-control"
+                           placeholder="如：B2023001" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="height: 38px;">提交选课</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if cross_courses %}
+<div class="card">
+    <div class="card-header">可用的跨系共享课程</div>
+    <div class="card-body">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>来源院系</th>
+                    <th>课程编号</th>
+                    <th>课程名称</th>
+                    <th>学分</th>
+                    <th>授课老师</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for course in cross_courses %}
+                <tr>
+                    <td>
+                        {% if course.source == 'B' %}院系B{% elif course.source == 'C' %}院系C{% else %}{{ course.source }}{% endif %}
+                    </td>
+                    <td>{{ course.课程编号 }}</td>
+                    <td>{{ course.课程名称 }}</td>
+                    <td>{{ course.学分 }}</td>
+                    <td>{{ course.授课老师 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

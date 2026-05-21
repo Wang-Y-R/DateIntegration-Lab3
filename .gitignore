@@ -12,3 +12,16 @@ Thumbs.db
 
 # Misc
 skills-lock.json
+
+# Java
+target/
+*.class
+
+# Python
+__pycache__/
+*.pyc
+*.db
+.venv/
+
+# Nix
+.direnv/

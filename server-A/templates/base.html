@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}院系A教务系统{% endblock %}</title>
+    <style>
+        /* ========== Reset & Base ========== */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { font-size: 14px; }
+        body {
+            font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+            background: #f0f2f5;
+            color: #1e293b;
+            line-height: 1.6;
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* ========== CSS Variables ========== */
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --primary-light: #dbeafe;
+            --primary-bg: #eff6ff;
+            --sidebar-bg: #1e293b;
+            --sidebar-hover: #334155;
+            --sidebar-active: var(--primary);
+            --white: #ffffff;
+            --gray-50: #f8fafc;
+            --gray-100: #f1f5f9;
+            --gray-200: #e2e8f0;
+            --gray-400: #94a3b8;
+            --gray-500: #64748b;
+            --gray-600: #475569;
+            --gray-800: #1e293b;
+            --success: #16a34a;
+            --success-bg: #f0fdf4;
+            --warning: #d97706;
+            --warning-bg: #fffbeb;
+            --danger: #dc2626;
+            --danger-bg: #fef2f2;
+            --radius-sm: 4px;
+            --radius: 8px;
+            --radius-lg: 12px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,.05);
+            --shadow: 0 1px 3px rgba(0,0,0,.1), 0 1px 2px rgba(0,0,0,.06);
+            --shadow-md: 0 4px 6px rgba(0,0,0,.07), 0 2px 4px rgba(0,0,0,.06);
+            --transition: .2s ease;
+        }
+
+        /* ========== Sidebar ========== */
+        .sidebar {
+            width: 220px;
+            min-width: 220px;
+            background: var(--sidebar-bg);
+            color: var(--gray-400);
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            z-index: 100;
+        }
+        .sidebar-brand {
+            padding: 24px 20px;
+            border-bottom: 1px solid rgba(255,255,255,.08);
+        }
+        .sidebar-brand h1 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--white);
+            letter-spacing: .5px;
+        }
+        .sidebar-brand span {
+            display: block;
+            font-size: .8rem;
+            color: var(--gray-500);
+            margin-top: 4px;
+        }
+        .sidebar-nav {
+            flex: 1;
+            padding: 12px 0;
+        }
+        .sidebar-nav a {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 24px;
+            color: var(--gray-400);
+            text-decoration: none;
+            font-size: .95rem;
+            transition: all var(--transition);
+            border-left: 3px solid transparent;
+        }
+        .sidebar-nav a:hover {
+            background: var(--sidebar-hover);
+            color: var(--white);
+        }
+        .sidebar-nav a.active {
+            background: rgba(37,99,235,.15);
+            color: var(--white);
+            border-left-color: var(--primary);
+        }
+        .sidebar-nav a .nav-icon {
+            width: 20px;
+            text-align: center;
+            font-style: normal;
+        }
+        .sidebar-footer {
+            padding: 16px 20px;
+            border-top: 1px solid rgba(255,255,255,.08);
+            font-size: .8rem;
+            color: var(--gray-500);
+        }
+
+        /* ========== Main Content ========== */
+        .main-wrapper {
+            flex: 1;
+            margin-left: 220px;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        /* ========== Top Header ========== */
+        .top-header {
+            background: var(--white);
+            padding: 0 32px;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--gray-200);
+            box-shadow: var(--shadow-sm);
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+        .top-header .page-title {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: var(--gray-800);
+        }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: .9rem;
+            color: var(--gray-600);
+        }
+        .user-info .role-badge {
+            background: var(--primary-light);
+            color: var(--primary);
+            padding: 2px 10px;
+            border-radius: 99px;
+            font-size: .75rem;
+            font-weight: 600;
+        }
+
+        /* ========== Page Content ========== */
+        .page-content {
+            flex: 1;
+            padding: 28px 32px;
+        }
+
+        /* ========== Shared Components ========== */
+        .card {
+            background: var(--white);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            border: 1px solid var(--gray-200);
+        }
+        .card-header {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--gray-100);
+            font-weight: 600;
+            font-size: 1rem;
+            color: var(--gray-800);
+        }
+        .card-body { padding: 20px 24px; }
+
+        /* Tables */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: .9rem;
+        }
+        .data-table th {
+            background: var(--gray-50);
+            padding: 10px 14px;
+            text-align: left;
+            font-weight: 600;
+            color: var(--gray-600);
+            border-bottom: 2px solid var(--gray-200);
+            white-space: nowrap;
+        }
+        .data-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--gray-100);
+            color: var(--gray-800);
+        }
+        .data-table tbody tr:hover {
+            background: var(--primary-bg);
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-size: .85rem;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all var(--transition);
+            line-height: 1.5;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: var(--white);
+        }
+        .btn-primary:hover { background: var(--primary-dark); }
+        .btn-success {
+            background: var(--success);
+            color: var(--white);
+        }
+        .btn-success:hover { opacity: .9; }
+        .btn-danger {
+            background: var(--danger);
+            color: var(--white);
+        }
+        .btn-danger:hover { opacity: .9; }
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--gray-300, #cbd5e1);
+            color: var(--gray-600);
+        }
+        .btn-outline:hover { background: var(--gray-100); }
+        .btn-sm { padding: 4px 10px; font-size: .8rem; }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 99px;
+            font-size: .75rem;
+            font-weight: 600;
+        }
+        .badge-success { background: var(--success-bg); color: var(--success); }
+        .badge-warning { background: var(--warning-bg); color: var(--warning); }
+        .badge-info { background: var(--primary-light); color: var(--primary); }
+
+        /* Stat Cards */
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 28px;
+        }
+        .stat-card {
+            background: var(--white);
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--gray-200);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .stat-card .stat-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: var(--radius);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            flex-shrink: 0;
+        }
+        .stat-card .stat-icon.blue { background: var(--primary-light); color: var(--primary); }
+        .stat-card .stat-icon.green { background: var(--success-bg); color: var(--success); }
+        .stat-card .stat-icon.amber { background: var(--warning-bg); color: var(--warning); }
+        .stat-card .stat-value { font-size: 1.6rem; font-weight: 700; color: var(--gray-800); }
+        .stat-card .stat-label { font-size: .8rem; color: var(--gray-500); margin-top: 2px; }
+
+        /* Flash / Error Messages */
+        .alert {
+            padding: 12px 20px;
+            border-radius: var(--radius);
+            margin-bottom: 20px;
+            font-size: .9rem;
+        }
+        .alert-error { background: var(--danger-bg); color: var(--danger); border: 1px solid #fecaca; }
+        .alert-success { background: var(--success-bg); color: var(--success); border: 1px solid #bbf7d0; }
+
+        /* Form */
+        .form-group { margin-bottom: 16px; }
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            color: var(--gray-600);
+            font-size: .9rem;
+        }
+        .form-control {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--gray-200);
+            border-radius: var(--radius-sm);
+            font-size: .9rem;
+            color: var(--gray-800);
+            background: var(--white);
+            transition: border-color var(--transition);
+            outline: none;
+        }
+        .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+
+        /* Utility */
+        .text-muted { color: var(--gray-500); }
+        .text-center { text-align: center; }
+        .mt-2 { margin-top: 8px; }
+        .mt-4 { margin-top: 16px; }
+        .mb-4 { margin-bottom: 16px; }
+        .mb-6 { margin-bottom: 24px; }
+
+        /* Highlight shared row */
+        .row-shared { background: rgba(37,99,235,.04); }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <h1>院系A教务系统</h1>
+            <span>软件学院</span>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="{{ url_for('dashboard') }}">
+                <i class="nav-icon">🏠</i> 首页
+            </a>
+            <a href="{{ url_for('dashboard') }}#enrolled">
+                <i class="nav-icon">📚</i> 我的课程
+            </a>
+            <a href="{{ url_for('courses') }}">
+                <i class="nav-icon">📋</i> 选课中心
+            </a>
+            <a href="{{ url_for('shared_courses') }}">
+                <i class="nav-icon">🔗</i> 跨系选课
+            </a>
+            {% if session.get('role') == '管理员' %}
+            <a href="{{ url_for('admin_stats') }}">
+                <i class="nav-icon">📊</i> 数据统计
+            </a>
+            {% endif %}
+        </nav>
+        <div class="sidebar-footer">
+            <a href="{{ url_for('logout') }}" style="color: inherit; text-decoration: none; display: flex; align-items: center; gap: 8px;">
+                <i class="nav-icon">🚪</i> 退出登录
+            </a>
+        </div>
+    </aside>
+
+    <!-- Main -->
+    <div class="main-wrapper">
+        <header class="top-header">
+            <div class="page-title">{% block page_title %}{% endblock %}</div>
+            <div class="user-info">
+                <span>{{ session.get('user', '未登录') }}</span>
+                {% if session.get('role') %}
+                <span class="role-badge">{{ session.get('role') }}</span>
+                <a href="{{ url_for('logout') }}" class="btn btn-outline btn-sm" style="margin-left: 12px; text-decoration: none; padding: 4px 12px;">退出登录</a>
+                {% endif %}
+            </div>
+        </header>
+        <main class="page-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+</body>
+</html>
