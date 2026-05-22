@@ -55,15 +55,102 @@ class Database:
                     cur.execute(sql, params)
                 return cur.fetchall() if fetch else cur.rowcount
 
+    def _table_exists(self, table: str) -> bool:
+        rows = self.execute(
+            "SELECT COUNT(*) AS total FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
+            (self.config["database"], table),
+            fetch=True,
+        )
+        return rows[0]["total"] > 0
+
+    def _column_exists(self, table: str, column: str) -> bool:
+        rows = self.execute(
+            "SELECT COUNT(*) AS total FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_NAME=%s",
+            (self.config["database"], table, column),
+            fetch=True,
+        )
+        return rows[0]["total"] > 0
+
+    def _table_has_columns(self, table: str, columns: list[str]) -> bool:
+        if not self._table_exists(table):
+            return False
+        return all(self._column_exists(table, col) for col in columns)
+
+    def repair_schema(self):
+        """修复远程库中旧版表结构（缺少 Cno 等字段时重建集成相关表）。"""
+        core_required = {
+            "c_courses": ["Cno", "Cnn", "Crd", "Cpt", "Tec", "Pla", "Share"],
+            "c_students": ["Sno", "Snn", "Sex", "Sde", "Pwd"],
+            "c_sc": ["Cno", "Sno", "Grd"],
+        }
+        integration_tables = [
+            "inbound_cross_enrollments",
+            "cross_college_selections",
+            "imported_shared_courses",
+        ]
+        integration_required = {
+            "imported_shared_courses": [
+                "source_college",
+                "Cno",
+                "Cnn",
+                "Crd",
+                "Cpt",
+                "Tec",
+                "Pla",
+                "xml_path",
+            ],
+            "cross_college_selections": [
+                "source_college",
+                "Sno",
+                "Cno",
+                "term_name",
+                "status",
+            ],
+            "inbound_cross_enrollments": [
+                "source_college",
+                "Sno",
+                "Snn",
+                "Cno",
+                "Cnn",
+                "term_name",
+                "status",
+                "xml_path",
+            ],
+        }
+
+        core_broken = any(
+            self._table_exists(table) and not self._table_has_columns(table, cols)
+            for table, cols in core_required.items()
+        )
+        if core_broken:
+            for table in [
+                "inbound_cross_enrollments",
+                "cross_college_selections",
+                "imported_shared_courses",
+                "c_sc",
+                "c_courses",
+                "c_students",
+                "c_accounts",
+            ]:
+                self.execute(f"DROP TABLE IF EXISTS {table}")
+
+        for table in integration_tables:
+            cols = integration_required[table]
+            if self._table_exists(table) and not self._table_has_columns(table, cols):
+                self.execute(f"DROP TABLE IF EXISTS {table}")
+
     def initialize_schema(self):
+        self.repair_schema()
         statements = [
             "CREATE TABLE IF NOT EXISTS c_accounts (acc VARCHAR(12) PRIMARY KEY, passwd VARCHAR(12) NOT NULL, CreateDate TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE IF NOT EXISTS c_students (Sno VARCHAR(9) PRIMARY KEY, Snn VARCHAR(10) NOT NULL, Sex VARCHAR(1) NOT NULL, Sde VARCHAR(6) NOT NULL, Pwd CHAR(6) NOT NULL)",
-            "CREATE TABLE IF NOT EXISTS c_courses (Cno CHAR(4) PRIMARY KEY, Cnn VARCHAR(10) NOT NULL, Crd INT NOT NULL, Cpt INT NOT NULL, Tec VARCHAR(20) NOT NULL, Pla VARCHAR(18) NOT NULL, Share CHAR(1) NOT NULL)",
-            "CREATE TABLE IF NOT EXISTS c_sc (Cno CHAR(4) NOT NULL, Sno VARCHAR(9) NOT NULL, Grd INT NOT NULL DEFAULT 0, PRIMARY KEY (Cno, Sno))",
-            "CREATE TABLE IF NOT EXISTS imported_shared_courses (source_college VARCHAR(5) NOT NULL, Cno CHAR(4) NOT NULL, Cnn VARCHAR(20) NOT NULL, Crd INT NOT NULL, Cpt INT NOT NULL, Tec VARCHAR(20) NOT NULL, Pla VARCHAR(20) NOT NULL, xml_path VARCHAR(255) NOT NULL, PRIMARY KEY (source_college, Cno))",
-            "CREATE TABLE IF NOT EXISTS cross_college_selections (source_college VARCHAR(5) NOT NULL, Sno VARCHAR(9) NOT NULL, Cno CHAR(4) NOT NULL, term_name VARCHAR(30) NOT NULL, status VARCHAR(20) NOT NULL, PRIMARY KEY (source_college, Sno, Cno, term_name))",
-            "CREATE TABLE IF NOT EXISTS inbound_cross_enrollments (source_college VARCHAR(5) NOT NULL, Sno VARCHAR(9) NOT NULL, Snn VARCHAR(20) NOT NULL, Cno CHAR(4) NOT NULL, Cnn VARCHAR(20) NOT NULL, term_name VARCHAR(30) NOT NULL, status VARCHAR(20) NOT NULL, xml_path VARCHAR(255) NOT NULL, PRIMARY KEY (source_college, Sno, Cno, term_name))",
+            "CREATE TABLE IF NOT EXISTS c_courses (Cno VARCHAR(16) PRIMARY KEY, Cnn VARCHAR(20) NOT NULL, Crd INT NOT NULL, Cpt INT NOT NULL, Tec VARCHAR(20) NOT NULL, Pla VARCHAR(30) NOT NULL, Share CHAR(1) NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS c_sc (Cno VARCHAR(16) NOT NULL, Sno VARCHAR(9) NOT NULL, Grd INT NOT NULL DEFAULT 0, PRIMARY KEY (Cno, Sno))",
+            "CREATE TABLE IF NOT EXISTS imported_shared_courses (source_college VARCHAR(5) NOT NULL, Cno VARCHAR(16) NOT NULL, Cnn VARCHAR(30) NOT NULL, Crd INT NOT NULL, Cpt INT NOT NULL, Tec VARCHAR(20) NOT NULL, Pla VARCHAR(30) NOT NULL, xml_path VARCHAR(255) NOT NULL, PRIMARY KEY (source_college, Cno))",
+            "CREATE TABLE IF NOT EXISTS cross_college_selections (source_college VARCHAR(5) NOT NULL, Sno VARCHAR(9) NOT NULL, Cno VARCHAR(16) NOT NULL, term_name VARCHAR(30) NOT NULL, status VARCHAR(20) NOT NULL, PRIMARY KEY (source_college, Sno, Cno, term_name))",
+            "CREATE TABLE IF NOT EXISTS inbound_cross_enrollments (source_college VARCHAR(5) NOT NULL, Sno VARCHAR(9) NOT NULL, Snn VARCHAR(20) NOT NULL, Cno VARCHAR(16) NOT NULL, Cnn VARCHAR(30) NOT NULL, term_name VARCHAR(30) NOT NULL, status VARCHAR(20) NOT NULL, xml_path VARCHAR(255) NOT NULL, PRIMARY KEY (source_college, Sno, Cno, term_name))",
         ]
         for sql in statements:
             self.execute(sql)
@@ -326,7 +413,18 @@ class SystemCApp:
             messagebox.showerror("登录失败", "用户名或密码错误。")
             return
         self.user_info = user
+        self.ensure_provider_running()
         self.create_main_view()
+
+    def ensure_provider_running(self):
+        """登录后自动启动本院 Internal API，供集成服务器回调（默认 8083）。"""
+        try:
+            port = int(self.provider_port) if self.provider_port else DEFAULT_PROVIDER_PORT
+            if self.provider_server is None or self.provider_server.port != port:
+                self.provider_server = IntegrationProviderServer(self.db, port=port)
+            self.provider_server.start()
+        except Exception:
+            pass
 
     def create_main_view(self):
         self.clear_root()
@@ -340,22 +438,23 @@ class SystemCApp:
         tk.Label(right_box, text=f"当前用户：{name_text} / {role_text}", bg="#17324d", fg="#d7e4f2").pack(side="left", padx=(0, 12), pady=12)
         ttk.Button(right_box, text="退出登录", command=self.logout).pack(side="left", pady=12)
 
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill="both", expand=True, padx=14, pady=14)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=14, pady=14)
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
         if self.user_info["role"] == "admin":
-            self.tab_init = tk.Frame(notebook, bg="#f7fafc")
-            self.tab_data = tk.Frame(notebook, bg="#f7fafc")
-            self.tab_xml = tk.Frame(notebook, bg="#f7fafc")
-            self.tab_integration = tk.Frame(notebook, bg="#f7fafc")
-            self.tab_stats = tk.Frame(notebook, bg="#f7fafc")
-            self.tab_drop = tk.Frame(notebook, bg="#f7fafc")
-            notebook.add(self.tab_init, text="初始化")
-            notebook.add(self.tab_data, text="本院数据")
-            notebook.add(self.tab_xml, text="XML集成")
-            notebook.add(self.tab_integration, text="集成服务器")
-            notebook.add(self.tab_stats, text="集成统计")
-            notebook.add(self.tab_drop, text="退选流程")
+            self.tab_init = tk.Frame(self.notebook, bg="#f7fafc")
+            self.tab_data = tk.Frame(self.notebook, bg="#f7fafc")
+            self.tab_xml = tk.Frame(self.notebook, bg="#f7fafc")
+            self.tab_integration = tk.Frame(self.notebook, bg="#f7fafc")
+            self.tab_stats = tk.Frame(self.notebook, bg="#f7fafc")
+            self.tab_drop = tk.Frame(self.notebook, bg="#f7fafc")
+            self.notebook.add(self.tab_init, text="初始化")
+            self.notebook.add(self.tab_data, text="本院数据")
+            self.notebook.add(self.tab_xml, text="XML集成")
+            self.notebook.add(self.tab_integration, text="集成服务器")
+            self.notebook.add(self.tab_stats, text="集成统计")
+            self.notebook.add(self.tab_drop, text="退选流程")
             self.build_init_tab()
             self.build_data_tab()
             self.build_xml_tab()
@@ -363,12 +462,12 @@ class SystemCApp:
             self.build_stats_tab()
             self.build_drop_tab()
         else:
-            self.tab_profile = tk.Frame(notebook, bg="#f7fafc")
-            self.tab_courses = tk.Frame(notebook, bg="#f7fafc")
-            self.tab_stats = tk.Frame(notebook, bg="#f7fafc")
-            notebook.add(self.tab_profile, text="个人信息管理")
-            notebook.add(self.tab_courses, text="课程信息管理")
-            notebook.add(self.tab_stats, text="统计信息查看")
+            self.tab_profile = tk.Frame(self.notebook, bg="#f7fafc")
+            self.tab_courses = tk.Frame(self.notebook, bg="#f7fafc")
+            self.tab_stats = tk.Frame(self.notebook, bg="#f7fafc")
+            self.notebook.add(self.tab_profile, text="个人信息管理")
+            self.notebook.add(self.tab_courses, text="课程信息管理")
+            self.notebook.add(self.tab_stats, text="统计信息查看")
             self.build_student_profile_tab()
             self.build_student_course_tab()
             self.build_student_stats_tab()
@@ -381,6 +480,7 @@ class SystemCApp:
         box.pack(fill="both", expand=True, padx=18, pady=18)
         tk.Label(box, text="系统C初始化（严格按院系C表结构）", font=("STHeiti", 18, "bold"), bg="white", fg="#183b56").pack(anchor="w", padx=20, pady=(20, 12))
         tk.Label(box, text="初始化后将生成 c_accounts、c_students、c_courses、c_sc 四张院系C原始表，以及集成过程辅助表。", bg="white", fg="#4b5563", justify="left").pack(anchor="w", padx=20)
+        tk.Label(box, text="注意：重新初始化会清空「已导入共享课程」等集成数据，拉取外院课后请勿重复初始化。", bg="white", fg="#b45309", justify="left").pack(anchor="w", padx=20, pady=(8, 0))
         ttk.Button(box, text="初始化示例数据", command=self.initialize_demo_data).pack(anchor="w", padx=20, pady=20)
         self.init_text = tk.Text(box, height=24, bg="#0f172a", fg="#dbeafe")
         self.init_text.pack(fill="both", expand=True, padx=20, pady=(0, 20))
@@ -415,6 +515,9 @@ class SystemCApp:
         self.xml_log = tk.Text(left, height=18, bg="#111827", fg="#d1fae5")
         self.xml_log.pack(fill="both", expand=True, pady=(12, 0))
 
+        refresh_row = tk.Frame(right, bg="#f7fafc")
+        refresh_row.pack(fill="x", padx=8, pady=(0, 4))
+        ttk.Button(refresh_row, text="刷新导入课程列表", command=self.refresh_imported_views).pack(anchor="e")
         self.shared_course_tree = self.create_treeview(right, ["source_college", "Cno", "Cnn", "Tec", "Crd", "Cpt"], "已导入共享课程")
         self.inbound_tree = self.create_treeview(right, ["source_college", "Sno", "Snn", "Cno", "Cnn", "term_name", "status"], "外院学生选修本院课程")
 
@@ -435,7 +538,7 @@ class SystemCApp:
         tk.Entry(form, textvariable=self.provider_port_var, width=42).grid(row=1, column=1, sticky="w", padx=8, pady=8)
         tk.Label(
             config,
-            text="Provider 接口：GET /api/provider/courses、POST /api/provider/receiveSelection（XML）",
+            text="Internal 接口：GET/POST /api/internal/course/shared|choose|drop（XML，与集成服务器配置端口 8083 一致）",
             bg="white",
             fg="#4b5563",
         ).pack(anchor="w", padx=18, pady=(0, 8))
@@ -454,7 +557,7 @@ class SystemCApp:
         top = tk.Frame(wrapper, bg="white", bd=1, relief="solid")
         top.pack(fill="x")
         tk.Label(top, text="集成服务器统计", font=("STHeiti", 16, "bold"), bg="white", fg="#183b56").pack(anchor="w", padx=18, pady=(16, 10))
-        tk.Label(top, text="优先调用集成服务器 GET /api/integrated/statistics；连接失败时回退到本地 XML 汇总。", bg="white", fg="#4b5563").pack(anchor="w", padx=18)
+        tk.Label(top, text="优先调用集成服务器 GET /api/integrated/statistics（JSON 汇总 A/B/C）；失败时回退本地 XML。", bg="white", fg="#4b5563").pack(anchor="w", padx=18)
         ttk.Button(top, text="刷新统计结果", command=self.refresh_stats).pack(anchor="w", padx=18, pady=14)
         self.stats_text = tk.Text(wrapper, height=26, bg="#0b1220", fg="#bfdbfe")
         self.stats_text.pack(fill="both", expand=True, pady=(14, 0))
@@ -489,6 +592,7 @@ class SystemCApp:
 
     def initialize_demo_data(self):
         try:
+            self.db.repair_schema()
             self.db.initialize_schema()
             self.db.seed_base_data()
             sample_files = self.xml_service.ensure_sample_external_xml()
@@ -528,21 +632,40 @@ class SystemCApp:
                 self.provider_server = IntegrationProviderServer(self.db, port=port)
             self.provider_server.start()
             self.provider_port = port
-            self.log(self.integration_log, f"本院 Provider 已启动：http://127.0.0.1:{port}/api/provider/courses")
-            self.log(self.integration_log, f"接收外院选课：POST http://127.0.0.1:{port}/api/provider/receiveSelection")
+            self.log(self.integration_log, f"本院 Internal API 已启动：http://127.0.0.1:{port}/api/internal/course/shared")
+            self.log(self.integration_log, f"外院选课回调：POST http://127.0.0.1:{port}/api/internal/course/choose")
         except Exception as exc:
             messagebox.showerror("Provider 启动失败", str(exc))
 
     def action_fetch_integrated_courses(self):
         try:
+            self.db.repair_schema()
             client = self.get_integration_client()
-            courses = client.get_integrated_courses()
-            rows = [integrated_course_to_import_row(c) for c in courses if str(c.get("college", c.get("ccollege", ""))).upper() != COLLEGE_C]
+            courses = client.get_shared_courses()
+            if not courses:
+                messagebox.showwarning(
+                    "未获取到课程",
+                    "集成服务器未返回外院共享课程。\n"
+                    "请确认：\n"
+                    "1. 院系 A 已启动（python app.py，端口 8081）\n"
+                    "2. 浏览器访问 http://localhost:8080/api/integrated/course/shared\n"
+                    "   时需带请求头 SourceSystem: C（或用下方测试链接）",
+                )
+                return
+            rows = [integrated_course_to_import_row(c) for c in courses]
             self.db.import_shared_courses(rows, f"integration:{self.integration_url}")
-            self.log(self.integration_log, f"已从集成服务器导入 {len(rows)} 门外院共享课程。")
+            self.log(self.integration_log, f"已从集成服务器（XML）导入 {len(rows)} 门外院共享课程。")
+            self.log(
+                self.integration_log,
+                "请到「XML集成」页右侧「已导入共享课程」查看；若为空请点该页「刷新导入课程列表」。",
+            )
+            self.refresh_imported_views()
             self.refresh_all_views()
         except Exception as exc:
-            messagebox.showerror("拉取课程失败", str(exc))
+            hint = ""
+            if "Unknown column 'Cno'" in str(exc):
+                hint = "\n\n请在「初始化」页重新点击「初始化示例数据」以重建数据库表。"
+            messagebox.showerror("拉取课程失败", f"{exc}{hint}")
 
     def action_choose_external_course(self):
         dialog = ChoiceDialog(self.root, self.db)
@@ -557,17 +680,18 @@ class SystemCApp:
             self.db.add_cross_college_enrollment(student_id, source_college, course_id, TERM)
             try:
                 client = self.get_integration_client()
-                client.submit_selection(
-                    sid=student_id,
-                    sname=student["Snn"],
-                    scollege=COLLEGE_C,
-                    cid=course_id,
-                    cname=course_name,
-                    ccollege=source_college,
-                )
+                student_xml = {
+                    "Sno": student_id,
+                    "Snm": student["Snn"],
+                    "Sex": student["Sex"],
+                    "Sde": student["Sde"],
+                }
+                code, msg = client.choose_course(student_xml, course_id, source_college)
+                if code != "200":
+                    raise RuntimeError(msg or f"集成服务器返回 Code={code}")
                 self.log(self.xml_log, f"已同步至集成服务器：{student_id} 选修 {source_college}/{course_id}")
                 if hasattr(self, "integration_log"):
-                    self.log(self.integration_log, f"跨院选课已提交：{student_id} -> {source_college}/{course_id}")
+                    self.log(self.integration_log, f"跨院选课已提交（XML）：{student_id} -> {source_college}/{course_id}")
             except Exception as sync_exc:
                 self.log(self.xml_log, f"本地选课成功，但集成服务器同步失败：{sync_exc}")
             self.log(self.xml_log, f"学生 {student_id} 已选修 {source_college} 学院课程 {course_id}。")
@@ -619,8 +743,19 @@ class SystemCApp:
             self.log(self.drop_log, f"已完成退选：{student_id} - {course_id}")
             if source_college != COLLEGE_C:
                 try:
-                    self.get_integration_client().drop_selection(student_id, course_id)
-                    self.log(self.drop_log, "已通过集成服务器 POST /api/integrated/drop 同步退选。")
+                    student = self.db.get_student_profile(student_id) or {"Snn": "", "Sex": "", "Sde": ""}
+                    student_xml = {
+                        "Sno": student_id,
+                        "Snm": student.get("Snn", ""),
+                        "Sex": student.get("Sex", ""),
+                        "Sde": student.get("Sde", ""),
+                    }
+                    code, msg = self.get_integration_client().drop_course(
+                        student_xml, course_id, source_college
+                    )
+                    if code != "200":
+                        raise RuntimeError(msg or f"Code={code}")
+                    self.log(self.drop_log, "已通过集成服务器 POST /api/integrated/course/drop 同步退选。")
                 except Exception as sync_exc:
                     self.log(self.drop_log, f"集成服务器退选同步失败：{sync_exc}")
                 path = self.xml_service.export_drop_request(student_id, course_id, source_college, term_name)
@@ -631,20 +766,67 @@ class SystemCApp:
         except Exception as exc:
             messagebox.showerror("退选失败", str(exc))
 
-    def refresh_all_views(self):
+    def on_tab_changed(self, event=None):
+        if not self.user_info or self.user_info.get("role") != "admin":
+            return
         try:
-            if self.user_info["role"] == "admin":
-                self.populate_tree(self.student_tree, self.db.get_students(), ["Sno", "Snn", "Sex", "Sde", "Pwd"])
-                self.populate_tree(self.course_tree, self.db.get_courses(), ["Cno", "Cnn", "Crd", "Cpt", "Tec", "Pla", "Share"])
-                self.populate_tree(self.enrollment_tree, self.db.get_enrollments(), ["Sno", "Snn", "Cno", "Cnn", "source_college", "term_name", "status"])
-                self.populate_tree(self.shared_course_tree, self.db.get_imported_shared_courses(), ["source_college", "Cno", "Cnn", "Tec", "Crd", "Cpt"])
-                self.populate_tree(self.inbound_tree, self.db.get_inbound_cross_enrollments(), ["source_college", "Sno", "Snn", "Cno", "Cnn", "term_name", "status"])
-            else:
+            widget = self.notebook.nametowidget(self.notebook.select())
+            if widget == self.tab_xml:
+                self.refresh_imported_views()
+        except Exception:
+            pass
+
+    def refresh_imported_views(self):
+        """仅刷新 XML 集成页的外院课程相关表格（避免被其它查询错误连带跳过）。"""
+        if self.user_info.get("role") != "admin":
+            return
+        shared_cols = ["source_college", "Cno", "Cnn", "Tec", "Crd", "Cpt"]
+        inbound_cols = ["source_college", "Sno", "Snn", "Cno", "Cnn", "term_name", "status"]
+        try:
+            shared_rows = self.db.get_imported_shared_courses()
+            self.populate_tree(self.shared_course_tree, shared_rows, shared_cols)
+            if hasattr(self, "xml_log"):
+                self.log(self.xml_log, f"已导入共享课程：{len(shared_rows)} 门。")
+        except Exception as exc:
+            if hasattr(self, "xml_log"):
+                self.log(self.xml_log, f"刷新共享课程列表失败：{exc}")
+        try:
+            self.populate_tree(
+                self.inbound_tree,
+                self.db.get_inbound_cross_enrollments(),
+                inbound_cols,
+            )
+        except Exception as exc:
+            if hasattr(self, "xml_log"):
+                self.log(self.xml_log, f"刷新外院选课列表失败：{exc}")
+
+    def refresh_all_views(self):
+        if self.user_info["role"] == "admin":
+            self._safe_populate(self.student_tree, self.db.get_students, ["Sno", "Snn", "Sex", "Sde", "Pwd"])
+            self._safe_populate(self.course_tree, self.db.get_courses, ["Cno", "Cnn", "Crd", "Cpt", "Tec", "Pla", "Share"])
+            self._safe_populate(
+                self.enrollment_tree,
+                self.db.get_enrollments,
+                ["Sno", "Snn", "Cno", "Cnn", "source_college", "term_name", "status"],
+            )
+            self.refresh_imported_views()
+        else:
+            try:
                 self.refresh_student_profile()
                 self.refresh_student_courses()
+            except Exception:
+                pass
+        try:
             self.refresh_stats()
         except Exception:
             pass
+
+    def _safe_populate(self, tree, fetch_fn, columns):
+        try:
+            self.populate_tree(tree, fetch_fn(), columns)
+        except Exception as exc:
+            if hasattr(self, "xml_log"):
+                self.log(self.xml_log, f"刷新列表失败（{columns[0]}…）：{exc}")
 
     def build_student_profile_tab(self):
         box = tk.Frame(self.tab_profile, bg="white", bd=1, relief="solid")
@@ -754,7 +936,16 @@ class SystemCApp:
             self.db.drop_enrollment(self.user_info["account"], course_id, source_college, TERM)
             if source_college != COLLEGE_C:
                 try:
-                    self.get_integration_client().drop_selection(self.user_info["account"], course_id)
+                    profile = self.db.get_student_profile(self.user_info["account"]) or {}
+                    student_xml = {
+                        "Sno": self.user_info["account"],
+                        "Snm": profile.get("Snn", self.user_info.get("name", "")),
+                        "Sex": profile.get("Sex", ""),
+                        "Sde": profile.get("Sde", ""),
+                    }
+                    self.get_integration_client().drop_course(
+                        student_xml, course_id, source_college
+                    )
                 except Exception:
                     pass
             self.refresh_student_courses()
@@ -767,11 +958,20 @@ class SystemCApp:
         target.delete("1.0", tk.END)
         try:
             stats = self.get_integration_client().get_statistics()
-            target.insert(tk.END, "集成服务器统计（GET /api/integrated/statistics）\n")
+            target.insert(tk.END, "集成服务器统计（GET /api/integrated/statistics，汇总各学院）\n")
             target.insert(tk.END, "=" * 46 + "\n")
             target.insert(tk.END, f"学生总数：{stats.get('studentCount', stats.get('students', 0))}\n")
             target.insert(tk.END, f"课程总数：{stats.get('courseCount', stats.get('courses', 0))}\n")
             target.insert(tk.END, f"选课总数：{stats.get('selectionCount', stats.get('enrollments', 0))}\n")
+            colleges = stats.get("colleges", [])
+            if colleges:
+                target.insert(tk.END, f"已汇总学院：{', '.join(colleges)}\n")
+            warnings = stats.get("warnings", [])
+            if warnings:
+                target.insert(tk.END, "-" * 46 + "\n")
+                target.insert(tk.END, "部分学院未响应：\n")
+                for w in warnings:
+                    target.insert(tk.END, f"  - {w}\n")
             if hasattr(self, "integration_log"):
                 self.log(self.integration_log, "已刷新集成服务器统计数据。")
             if self.user_info["role"] == "admin":

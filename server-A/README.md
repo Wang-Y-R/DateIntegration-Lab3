@@ -79,6 +79,14 @@ Content-Type: application/xml; charset=UTF-8
 
 从数据库删除对应的选课记录。
 
+### 本院统计
+
+```
+GET /api/internal/statistics
+```
+
+返回 JSON：`college`、`students`、`courses`、`enrollments`（供集成服务器汇总）。
+
 ## Web 页面
 
 基于 Jinja2 模板渲染，样式内联在 HTML 中，无需额外前端构建。

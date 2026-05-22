@@ -10,6 +10,7 @@ from functools import wraps
 import requests as http_client
 from flask import (
     Flask,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -542,6 +543,20 @@ def admin_stats():
 
 
 # ========== 内部 API 路由（供集成服务器调用，返回 XML） ==========
+
+
+@app.route("/api/internal/statistics", methods=["GET"])
+def api_internal_statistics():
+    """供集成服务器汇总统计"""
+    db = get_db()
+    stats = {
+        "college": "A",
+        "students": db.execute("SELECT COUNT(*) as cnt FROM student").fetchone()["cnt"],
+        "courses": db.execute("SELECT COUNT(*) as cnt FROM course").fetchone()["cnt"],
+        "enrollments": db.execute("SELECT COUNT(*) as cnt FROM choice").fetchone()["cnt"],
+    }
+    db.close()
+    return jsonify(stats)
 
 
 @app.route("/api/internal/course/shared", methods=["GET"])

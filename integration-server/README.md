@@ -49,6 +49,23 @@ Content-Type: application/xml
 
 接收源院系的选课请求，转换为目标院系格式后转发。
 
+### 跨院系退选
+
+```
+POST /api/integrated/course/drop
+Header: SourceSystem = A|B|C
+Header: DestinationSystem = A|B|C
+Content-Type: application/xml
+```
+
+### 全院统计
+
+```
+GET /api/integrated/statistics
+```
+
+汇总各院系 `GET /api/internal/statistics` 返回的 JSON（`students`、`courses`、`enrollments`）。
+
 ### 格式转换（兼容保留）（测试用）
 
 ```
