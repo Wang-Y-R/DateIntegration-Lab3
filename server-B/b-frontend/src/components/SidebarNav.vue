@@ -93,7 +93,7 @@
             <path d="M19 19V12" fill="none" stroke="currentColor" stroke-width="1.8"/>
           </svg>
         </span>
-        <span>统计概览</span>
+        <span>统计中心</span>
       </RouterLink>
     </div>
 

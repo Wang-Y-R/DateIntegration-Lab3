@@ -7,7 +7,7 @@
       </div>
       <div class="status-pill" :class="user ? 'on' : 'off'">
         <span class="dot"></span>
-        <span>{{ user ? '已登录' : '未登录' }}</span>
+        <span>{{ loginStatusText }}</span>
       </div>
     </header>
 
@@ -41,6 +41,7 @@
       </p>
       <div class="user-box" v-if="user">
         <h3>登录信息</h3>
+        <p>当前身份：{{ userRoleText }}</p>
         <p>登录成功，欢迎回来。</p>
         <button class="ghost" type="button" @click="handleLogout">退出登录</button>
       </div>
@@ -49,7 +50,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { requestJson } from "../api";
 
 const loginForm = reactive({
@@ -61,6 +62,16 @@ const loginForm = reactive({
 const loading = ref(false);
 const user = ref(null);
 const authMessage = reactive({ text: "", ok: true });
+
+const userRoleText = computed(() => {
+  if (!user.value?.role) return "";
+  return user.value.role === "ADMIN" ? "管理员账号" : "学生账号";
+});
+
+const loginStatusText = computed(() => {
+  if (!user.value) return "未登录";
+  return `已登录 - ${userRoleText.value}`;
+});
 
 const loadStoredUser = () => {
   const stored = localStorage.getItem("b-user");
@@ -89,11 +100,13 @@ const handleLogin = async () => {
       authMessage.ok = false;
       authMessage.text = body.message || "登录失败";
       user.value = null;
+      localStorage.removeItem("b-user");
+      localStorage.removeItem("b-profile");
       return;
     }
     authMessage.ok = true;
     authMessage.text = body.message || "登录成功";
-    user.value = body.data;
+    user.value = body.data || {};
     localStorage.setItem("b-user", JSON.stringify(body.data || {}));
 
     const profile = body?.data?.profile;
@@ -106,7 +119,11 @@ const handleLogin = async () => {
         origin: profile.origin || ""
       };
       localStorage.setItem("b-profile", JSON.stringify(profilePayload));
+    } else {
+      localStorage.removeItem("b-profile");
     }
+
+    window.location.reload();
   } catch (err) {
     authMessage.ok = false;
     authMessage.text = err?.message || "网络错误";
@@ -117,9 +134,11 @@ const handleLogin = async () => {
 
 const handleLogout = () => {
   localStorage.removeItem("b-user");
+  localStorage.removeItem("b-profile");
   user.value = null;
   authMessage.ok = true;
   authMessage.text = "已退出登录。";
+  window.location.reload();
 };
 
 onMounted(() => {

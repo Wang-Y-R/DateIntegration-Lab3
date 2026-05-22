@@ -113,7 +113,7 @@
               <td>{{ row.teacher }}</td>
               <td>{{ row.location }}</td>
               <td>
-                <button class="action-btn action-primary" @click="useCourse(row)">选用</button>
+                <button class="action-btn action-primary" @click="useCourse(row)">选课</button>
               </td>
             </tr>
           </tbody>
@@ -127,7 +127,7 @@
 <script setup>
 import { onMounted, reactive, ref } from "vue";
 
-const baseUrl = import.meta.env.VITE_INTEGRATED_BASE || "";
+const baseUrl = import.meta.env.VITE_API_BASE || "http://localhost:8083";
 
 const form = reactive({
   destination: "A",
@@ -165,6 +165,7 @@ const submitRequest = async () => {
       method: "POST",
       headers: {
         "Content-Type": "application/xml; charset=UTF-8",
+        SourceSystem: "B",
         DestinationSystem: form.destination
       },
       body: xml
@@ -182,7 +183,12 @@ const submitRequest = async () => {
 };
 
 const useCourse = (row) => {
+  console.log("useCourse selected:", row);
   form.cid = row.id || "";
+  form.name = row.name || form.name;
+  generateXml();
+  message.ok = true;
+  message.text = `已选择课程 ${form.cid} ${form.name}`;
 };
 
 const getText = (node, tag) => {
@@ -194,8 +200,8 @@ const parseCourseXml = (xmlText) => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlText, "application/xml");
   if (doc.querySelector("parsererror")) return [];
-  let nodes = Array.from(doc.getElementsByTagName("class"));
-  if (!nodes.length) nodes = Array.from(doc.getElementsByTagName("Class"));
+
+  const nodes = Array.from(doc.getElementsByTagName("class"));
   return nodes.map((node) => ({
     id: getText(node, "id"),
     name: getText(node, "name"),
@@ -215,10 +221,10 @@ const loadSharedCourses = async () => {
   }
   loading.courses = true;
   try {
-    const res = await fetch(`${baseUrl}/api/integrated/course/list`, {
+    const res = await fetch(`${baseUrl}/api/integrated/course/shared`, {
       method: "GET",
       headers: {
-        DestinationSystem: form.destination
+        SourceSystem: "B"
       }
     });
     const text = await res.text();
