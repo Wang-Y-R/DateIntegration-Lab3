@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}院系A教务系统 - 选课中心{% endblock %}
+{% block page_title %}选课中心{% endblock %}
+
+{% block content %}
+{% if message %}
+<div class="alert alert-success">{{ message }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header">全部课程列表</div>
+    <div class="card-body">
+        {% if courses %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>课程编号</th>
+                    <th>课程名称</th>
+                    <th>学分</th>
+                    <th>授课老师</th>
+                    <th>授课地点</th>
+                    <th>共享状态</th>
+                    {% if session.get('role') != '管理员' %}
+                    <th>操作</th>
+                    {% else %}
+                    <th>管理</th>
+                    {% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for course in courses %}
+                <tr class="{{ 'row-shared' if course.共享 == 'Y' else '' }}">
+                    <td>{{ course.课程编号 }}</td>
+                    <td>{{ course.课程名称 }}</td>
+                    <td>{{ course.学分 }}</td>
+                    <td>{{ course.授课老师 }}</td>
+                    <td>{{ course.授课地点 }}</td>
+                    <td>
+                        {% if course.共享 == 'Y' %}
+                        <span class="badge badge-info">已共享</span>
+                        {% else %}
+                        <span class="badge badge-warning">未共享</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if session.get('role') == '管理员' %}
+                        <form method="POST" action="{{ url_for('toggle_share', course_id=course.课程编号) }}" style="display: inline;">
+                            {% if course.共享 == 'Y' %}
+                            <button type="submit" class="btn btn-outline btn-sm">取消共享</button>
+                            {% else %}
+                            <button type="submit" class="btn btn-primary btn-sm">设为共享</button>
+                            {% endif %}
+                        </form>
+                        {% else %}
+                            {% if course.课程编号 in enrolled_ids %}
+                            <span class="badge badge-success">已选</span>
+                            <form method="POST" action="{{ url_for('drop_course', course_id=course.课程编号) }}" style="display: inline;">
+                                <button type="submit" class="btn btn-danger btn-sm">退课</button>
+                            </form>
+                            {% else %}
+                            <form method="POST" action="{{ url_for('enroll_course', course_id=course.课程编号) }}" style="display: inline;">
+                                <button type="submit" class="btn btn-success btn-sm">选课</button>
+                            </form>
+                            {% endif %}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted text-center" style="padding: 20px;">暂无课程数据</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

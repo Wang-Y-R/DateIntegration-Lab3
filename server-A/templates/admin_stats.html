@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}院系A教务系统 - 数据统计{% endblock %}
+{% block page_title %}数据统计{% endblock %}
+
+{% block content %}
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-icon blue">👨‍🎓</div>
+        <div>
+            <div class="stat-value">{{ stats.total_students }}</div>
+            <div class="stat-label">总学生数</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon green">📖</div>
+        <div>
+            <div class="stat-value">{{ stats.total_courses }}</div>
+            <div class="stat-label">总课程数</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon amber">📝</div>
+        <div>
+            <div class="stat-value">{{ stats.total_choices }}</div>
+            <div class="stat-label">选课记录数</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon blue">🔗</div>
+        <div>
+            <div class="stat-value">{{ stats.shared_courses }}</div>
+            <div class="stat-label">共享课程数</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">课程选课统计</div>
+    <div class="card-body">
+        {% if stats.course_enrollments %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>序号</th>
+                    <th>课程名称</th>
+                    <th>选课人数</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in stats.course_enrollments %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>{{ item.course_name }}</td>
+                    <td>
+                        <strong>{{ item.count }}</strong> 人
+                        <div style="background: var(--gray-100); border-radius: 4px; height: 6px; width: 120px; margin-top: 4px; overflow: hidden;">
+                            <div style="background: var(--primary); height: 100%; width: {{ [item.count / stats.total_students * 100, 100]|min }}%; border-radius: 4px;"></div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted text-center" style="padding: 20px;">暂无选课记录数据</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
