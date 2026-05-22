@@ -1,0 +1,23 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: b-backend
+  datasource:
+    url: jdbc:oracle:thin:@localhost:1521/xepdb1
+    username: B_SYSTEM
+    password: B_SYSTEM
+    driver-class-name: oracle.jdbc.OracleDriver
+  sql:
+    init:
+      mode: always
+      continue-on-error: true
+      encoding: UTF-8
+      schema-locations: classpath:db/schema-oracle.sql
+      data-locations: classpath:db/data-oracle.sql
+
+logging:
+  level:
+    edu.integration.b: INFO
+
