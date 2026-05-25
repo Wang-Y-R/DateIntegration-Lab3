@@ -11,3 +11,5 @@ logs/
 *.out
 *.err
 *.log.*
+
+**/.vite/
