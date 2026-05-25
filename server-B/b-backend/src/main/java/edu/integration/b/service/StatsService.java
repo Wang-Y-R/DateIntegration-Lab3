@@ -21,5 +21,14 @@ public class StatsService {
     m.put("courseChosenCounts", statsRepository.courseChosenCounts());
     return m;
   }
+
+  public Map<String, Object> integrationStats() {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put("college", "B");
+    m.put("students", statsRepository.studentCount());
+    m.put("courses", statsRepository.courseCount());
+    m.put("enrollments", statsRepository.choiceCount());
+    return m;
+  }
 }
 

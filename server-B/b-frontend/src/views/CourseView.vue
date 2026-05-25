@@ -256,7 +256,7 @@ const buildCrossChoiceXml = (sno, cno, destSystem, courseRow) => {
   const major = profile.major || profile.Sde || "";
   const origin = profile.origin || profile.Origin || "";
   const score = courseRow?.score || "";
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<CrossDepartmentChoice>\n  <Student>\n    <Sno>${sno}</Sno>\n    <Snm>${studentName}</Snm>\n    <Sex>${sex}</Sex>\n    <Sde>${major}</Sde>${origin ? `\n    <Origin>${origin}</Origin>` : ""}\n  </Student>\n  <Choice>\n    <Cid>${cno}</Cid>\n    <Sno>${sno}</Sno>\n    <Grd>${score}</Grd>\n  </Choice>\n</CrossDepartmentChoice>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<CrossDepartmentChoice>\n  <Student>\n    <Sno>${sno}</Sno>\n    <Snm>${studentName}</Snm>\n    <Sex>${sex}</Sex>\n    <Sde>${major}</Sde>${origin ? `\n    <Origin>${origin}</Origin>` : ""}\n  </Student>\n  <Choice>\n    <Cno>${cno}</Cno>\n    <Sno>${sno}</Sno>\n    <Grd>${score}</Grd>\n  </Choice>\n</CrossDepartmentChoice>`;
 };
 
 const dropCrossCourse = async (row, sno) => {

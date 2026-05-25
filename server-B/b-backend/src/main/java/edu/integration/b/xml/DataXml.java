@@ -3,8 +3,10 @@ package edu.integration.b.xml;
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlAnyElement;
+import javax.xml.bind.annotation.XmlSeeAlso;
 
 @XmlAccessorType(XmlAccessType.FIELD)
+@XmlSeeAlso({ClassesXml.class})
 public class DataXml {
   @XmlAnyElement(lax = true)
   private Object any;

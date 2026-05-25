@@ -31,7 +31,8 @@
         <form class="form-columns" @submit.prevent>
           <label>
             目标院系
-            <select v-model="form.destination" @change="loadSharedCourses">
+            <select v-model="form.destination" @change="onloadSharedCourses">
+              <option value="">请选择院系</option>
               <option value="A">A 院系</option>
               <option value="C">C 院系</option>
             </select>
@@ -118,7 +119,7 @@
                   type="button"
                   class="action-btn action-danger"
                   @click="dropChosenCourse(row)"
-                  :disabled="loading.courses || submitting"
+                  :disabled="loading.courses || submitting || !isDestinationValid"
                 >
                   退课并提交
                 </button>
@@ -127,7 +128,7 @@
                   type="button"
                   class="action-btn action-primary"
                   @click="useCourse(row)"
-                  :disabled="loading.courses || submitting"
+                  :disabled="loading.courses || submitting || !isDestinationValid"
                 >
                   选课并提交
                 </button>
@@ -145,10 +146,11 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { CHOICE_UPDATE_EVENT, emitChoiceUpdate, requestJson } from "../api";
 
+
 const baseUrl = import.meta.env.VITE_API_BASE || "http://localhost:8082";
 
 const form = reactive({
-  destination: "A",
+  destination: "",
   action: "choose",
   sid: "",
   name: "",
@@ -173,15 +175,24 @@ const chosenIdSet = computed(() => new Set(myChoices.value.map((row) => row.id))
 
 const isChosen = (row) => chosenIdSet.value.has(row.id);
 
+const isDestinationValid = computed(() => {
+  return form.destination === "A" || form.destination === "C";
+});
+
 const generateXml = () => {
   const profile = user.value?.profile || user.value || {};
   const origin = profile.origin || profile.Origin || "";
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<CrossDepartmentChoice>\n  <Student>\n    <Sno>${form.sid}</Sno>\n    <Snm>${form.name}</Snm>\n    <Sex>${form.sex}</Sex>\n    <Sde>${form.major}</Sde>${origin ? `\n    <Origin>${origin}</Origin>` : ""}\n  </Student>\n  <Choice>\n    <Cid>${form.cid}</Cid>\n    <Sno>${form.sid}</Sno>\n    <Grd>${form.score}</Grd>\n  </Choice>\n</CrossDepartmentChoice>`;
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<CrossDepartmentChoice>\n  <Student>\n    <Sno>${form.sid}</Sno>\n    <Snm>${form.name}</Snm>\n    <Sex>${form.sex}</Sex>\n    <Sde>${form.major}</Sde>${origin ? `\n    <Origin>${origin}</Origin>` : ""}\n  </Student>\n  <Choice>\n    <Cno>${form.cid}</Cno>\n    <Sno>${form.sid}</Sno>\n    <Grd>${form.score}</Grd>\n  </Choice>\n</CrossDepartmentChoice>`;
   xmlPayload.value = xml;
   return xml;
 };
 
 const submitRequest = async () => {
+  if (!isDestinationValid.value) {
+    message.ok = false;
+    message.text = "请先选择有效的目标院系";
+    return;
+  }
   console.log("submitRequest start", {
     baseUrl,
     action: form.action,
@@ -218,16 +229,13 @@ const submitRequest = async () => {
     message.text = res.ok ? "请求已发送，正在获取课程列表。" : "请求失败，请检查接口。";
     if (res.ok) {
       await syncCrossChoiceMirror();
-      // refresh shared courses list
       await loadSharedCourses();
       await loadMyChoices();
       emitChoiceUpdate();
-      // try to refresh local student's choices so UI reflects newly added course
       try {
         const choicesRes = await fetch(`${baseUrl}/api/local/choices?sno=${encodeURIComponent(form.sid)}`);
         if (choicesRes.ok) {
           const json = await choicesRes.json();
-          // json structure: { code, message, data }
           const data = json?.data || null;
           if (data) {
             message.text = `请求已处理。当前已选 ${Array.isArray(data) ? data.length : 'N'} 门课程`;
@@ -273,6 +281,7 @@ const submitCurrent = async () => {
 };
 
 const syncCrossChoiceMirror = async () => {
+  if (!isDestinationValid.value) return;
   if (form.destination === "B") {
     return;
   }
@@ -367,18 +376,35 @@ const parseResponseMessage = (xmlText) => {
   return msg ? msg.textContent || "" : "";
 };
 
+const onDestinationChange = () => {
+  sharedCourses.value = [];
+  message.text = "";
+  if (form.destination) {
+    loadSharedCourses();  
+  }
+};
+
 const loadSharedCourses = async () => {
+  if (!isDestinationValid.value) {
+    sharedCourses.value = [];
+    message.ok = false;
+    message.text = "请先选择目标院系";
+    return;
+  }
   if (!baseUrl) {
     message.ok = false;
     message.text = "未配置集成服务器地址，无法获取课程列表。";
     return;
   }
+  sharedCourses.value = [];
+  message.text = "";
   loading.courses = true;
   try {
     const res = await fetch(`${baseUrl}/api/proxy/integrated/course/shared`, {
       method: "GET",
       headers: {
-        SourceSystem: "B"
+        SourceSystem: "B", 
+        DestSystem: form.destination
       }
     });
     const text = await res.text();

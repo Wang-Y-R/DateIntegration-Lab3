@@ -7,8 +7,12 @@ import edu.integration.b.xml.ClassesXml;
 import edu.integration.b.xml.ResponseXml;
 import edu.integration.b.xml.StudentXml;
 import java.io.StringReader;
+import java.io.StringWriter;
 import java.util.Objects;
 import javax.xml.XMLConstants;
+import javax.xml.bind.JAXBContext;
+import javax.xml.bind.JAXBException;
+import javax.xml.bind.Marshaller;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.transform.stream.StreamSource;
 import javax.xml.validation.Schema;
@@ -41,6 +45,10 @@ public class InternalIntegrationService {
 
   public ResponseXml sharedCourses() {
     return ResponseXml.ok("获取共享课程列表成功", new ClassesXml(courseRepository.findSharedCoursesAsXml()));
+  }
+
+  public ClassesXml sharedCoursesRaw() {
+    return new ClassesXml(courseRepository.findSharedCoursesAsXml());
   }
 
   @Transactional
@@ -218,6 +226,21 @@ public class InternalIntegrationService {
       }
     }
     return null;
+  }
+  public String sharedCoursesXml() {
+    ClassesXml payload = new ClassesXml(courseRepository.findSharedCoursesAsXml());
+    try {
+      JAXBContext ctx = JAXBContext.newInstance(ClassesXml.class);
+      Marshaller marshaller = ctx.createMarshaller();
+      marshaller.setProperty(Marshaller.JAXB_ENCODING, "UTF-8");
+      marshaller.setProperty(Marshaller.JAXB_FORMATTED_OUTPUT, Boolean.FALSE);
+      marshaller.setProperty(Marshaller.JAXB_FRAGMENT, Boolean.TRUE); // no <?xml ...?>
+      StringWriter sw = new StringWriter();
+      marshaller.marshal(payload, sw);
+      return sw.toString();
+    } catch (JAXBException ex) {
+      throw new IllegalStateException("marshal ClassesXml failed", ex);
+    }
   }
 
   private static class CrossDepartmentPayload {

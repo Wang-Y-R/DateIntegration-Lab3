@@ -1,5 +1,7 @@
 package com.example.integrationServer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
@@ -14,6 +16,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/integrated")
 public class IntegrationController {
+
+    private static final Logger log = LoggerFactory.getLogger(IntegrationController.class);
 
     @Autowired
     private XmlService xmlService;
@@ -60,6 +64,10 @@ public class IntegrationController {
 
                 // Extract Data content from Response wrapper
                 String dataXml = extractData(body);
+                if ("B".equals(system)) {
+                    log.warn("B raw body: {}", body);
+                    log.warn("B dataXml: {}", dataXml);
+                }
                 if (dataXml == null || dataXml.isBlank()) continue;
 
                 // Transform source format → unified format → requester's format
@@ -69,6 +77,7 @@ public class IntegrationController {
                 String inner = extractInnerElements(converted, "Classes");
                 mergedClasses.append(inner);
             } catch (Exception e) {
+                log.warn("sharedCourses merge failed for system {}: {}", system, e.toString());
                 errors.add(system + ": " + e.getMessage());
             }
         }
