@@ -17,6 +17,6 @@ npm run dev
 Create a .env file:
 
 ```
-VITE_API_BASE=http://localhost:8081
+VITE_API_BASE=http://localhost:8082
 VITE_INTEGRATED_BASE=http://localhost:8080
 ```

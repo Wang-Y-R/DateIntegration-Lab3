@@ -76,8 +76,8 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
-import { requestJson } from "../api";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { CHOICE_UPDATE_EVENT, emitChoiceUpdate, apiBaseUrl, requestJson } from "../api";
 
 const user = ref(null);
 const loading = ref(false);
@@ -102,7 +102,9 @@ const normalizeCourses = (rows) =>
     teacher: row.TEACHER || row.teacher || row.TEC || row.tec,
     location: row.LOCATION || row.location || row.PLA || row.pla,
     share: row.SHARE || row.share,
-    grade: row.GRD || row.grd
+    grade: row.GRD || row.grd,
+    source: row.SOURCE || row.source || "LOCAL",
+    destSystem: row.DEST_SYSTEM || row.destSystem || ""
   }));
 
 const loadMyCourses = async () => {
@@ -131,15 +133,23 @@ const dropCourse = async (row) => {
   loading.value = true;
   message.text = "";
   try {
-    const body = await requestJson("/api/local/choice/drop", {
-      method: "POST",
-      body: JSON.stringify({ sno: sno.value, cno: row.id })
-    });
-    message.ok = body.code === 200;
-    message.text = body.message || (body.code === 200 ? "退课成功" : "退课失败");
-    if (body.code === 200) {
-      myCourses.value = myCourses.value.filter((item) => item.id !== row.id);
+    if (row.source === "CROSS") {
+      await dropCrossCourse(row);
+      message.ok = true;
+      message.text = "跨院系退课成功";
+    } else {
+      const body = await requestJson("/api/local/choice/drop", {
+        method: "POST",
+        body: JSON.stringify({ sno: sno.value, cno: row.id })
+      });
+      message.ok = body.code === 200;
+      message.text = body.message || (body.code === 200 ? "退课成功" : "退课失败");
+      if (body.code !== 200) {
+        return;
+      }
     }
+    await loadMyCourses();
+    emitChoiceUpdate();
   } catch (err) {
     message.ok = false;
     message.text = err?.message || "网络错误";
@@ -148,9 +158,54 @@ const dropCourse = async (row) => {
   }
 };
 
+const buildCrossChoiceXml = (snoValue, cno, destSystem, courseRow) => {
+  const profile = user.value?.profile || user.value || {};
+  const studentName = profile.snm || profile.name || "";
+  const sex = profile.sex || "";
+  const major = profile.major || profile.Sde || "";
+  const origin = profile.origin || profile.Origin || "";
+  const score = courseRow?.grade || courseRow?.score || "";
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<CrossDepartmentChoice>\n  <Student>\n    <Sno>${snoValue}</Sno>\n    <Snm>${studentName}</Snm>\n    <Sex>${sex}</Sex>\n    <Sde>${major}</Sde>${origin ? `\n    <Origin>${origin}</Origin>` : ""}\n  </Student>\n  <Choice>\n    <Cid>${cno}</Cid>\n    <Sno>${snoValue}</Sno>\n    <Grd>${score}</Grd>\n  </Choice>\n</CrossDepartmentChoice>`;
+};
+
+const dropCrossCourse = async (row) => {
+  const xml = buildCrossChoiceXml(sno.value, row.id, row.destSystem || "A", row);
+  const res = await fetch(`${apiBaseUrl}/api/proxy/integrated/course/drop`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/xml; charset=UTF-8",
+      SourceSystem: "B",
+      DestinationSystem: row.destSystem || "A"
+    },
+    body: xml
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(text || "跨院系退课失败");
+  }
+  try {
+    await requestJson("/api/local/cross-choice/sync", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "drop",
+        sno: sno.value,
+        cno: row.id,
+        destSystem: row.destSystem || "A"
+      })
+    });
+  } catch (err) {
+    console.warn("mirror drop sync failed", err);
+  }
+};
+
 onMounted(() => {
   const stored = localStorage.getItem("b-user");
   user.value = stored ? JSON.parse(stored) : null;
   loadMyCourses();
+  window.addEventListener(CHOICE_UPDATE_EVENT, loadMyCourses);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener(CHOICE_UPDATE_EVENT, loadMyCourses);
 });
 </script>

@@ -2,6 +2,7 @@ package edu.integration.b.controller;
 
 import edu.integration.b.service.LocalAcademicService;
 import edu.integration.b.web.ApiResponse;
+import edu.integration.b.web.dto.CrossChoiceSyncRequest;
 import edu.integration.b.web.dto.ChooseRequest;
 import edu.integration.b.web.dto.StudentProfileRequest;
 import java.util.List;
@@ -60,6 +61,12 @@ public class LocalAcademicController {
   public ApiResponse<Map<String, Object>> drop(@RequestBody ChooseRequest req) {
     if (req == null) return ApiResponse.badRequest("请求体不能为空");
     return ApiResponse.ok("退课成功", localAcademicService.dropLocalCourse(req.getSno(), req.getCno()));
+  }
+
+  @PostMapping("/cross-choice/sync")
+  public ApiResponse<Map<String, Object>> syncCrossChoice(@RequestBody CrossChoiceSyncRequest req) {
+    if (req == null) return ApiResponse.badRequest("请求体不能为空");
+    return ApiResponse.ok("同步成功", localAcademicService.syncCrossChoice(req));
   }
 }
 

@@ -6,19 +6,19 @@ import javax.xml.bind.annotation.XmlElement;
 
 @XmlAccessorType(XmlAccessType.FIELD)
 public class StudentXml {
-  @XmlElement(name = "id", required = true)
+  @XmlElement(name = "Sno", required = true)
   private String id;
 
-  @XmlElement(name = "name", required = true)
+  @XmlElement(name = "Snm", required = true)
   private String name;
 
-  @XmlElement(name = "sex", required = true)
+  @XmlElement(name = "Sex", required = true)
   private String sex;
 
-  @XmlElement(name = "major", required = true)
+  @XmlElement(name = "Sde", required = true)
   private String major;
 
-  @XmlElement(name = "origin")
+  @XmlElement(name = "Origin")
   private String origin;
 
   public StudentXml() {}

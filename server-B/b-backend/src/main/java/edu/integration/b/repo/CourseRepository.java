@@ -32,14 +32,16 @@ public class CourseRepository {
         new RowMapper<ClassXml>() {
           @Override
           public ClassXml mapRow(ResultSet rs, int rowNum) throws SQLException {
+            String shareFlag = rs.getString("SHARE_FLAG");
+            String share = "1".equals(shareFlag) ? "Y" : "N";
             return new ClassXml(
-                rs.getString("CNO"),
-                rs.getString("CNM"),
-                rs.getString("CTM"),
-                rs.getString("CPT"),
-                rs.getString("TEC"),
-                rs.getString("PLA"),
-                rs.getString("SHARE_FLAG"));
+              rs.getString("CNO"),
+              rs.getString("CNM"),
+              rs.getString("CTM"),
+              rs.getString("CPT"),
+              rs.getString("TEC"),
+              rs.getString("PLA"),
+              share);
           }
         });
   }

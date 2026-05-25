@@ -1,7 +1,6 @@
 package edu.integration.b.controller;
 
 import edu.integration.b.service.InternalIntegrationService;
-import edu.integration.b.xml.CrossDepartmentChoiceXml;
 import edu.integration.b.xml.ResponseXml;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -25,13 +24,13 @@ public class InternalIntegrationController {
   }
 
   @PostMapping(value = "/choose", consumes = MediaType.APPLICATION_XML_VALUE, produces = MediaType.APPLICATION_XML_VALUE)
-  public ResponseXml choose(@RequestBody CrossDepartmentChoiceXml request) {
-    return internalIntegrationService.choose(request);
+  public ResponseXml choose(@RequestBody String requestXml) {
+    return internalIntegrationService.choose(requestXml);
   }
 
   @PostMapping(value = "/drop", consumes = MediaType.APPLICATION_XML_VALUE, produces = MediaType.APPLICATION_XML_VALUE)
-  public ResponseXml drop(@RequestBody CrossDepartmentChoiceXml request) {
-    return internalIntegrationService.drop(request);
+  public ResponseXml drop(@RequestBody String requestXml) {
+    return internalIntegrationService.drop(requestXml);
   }
 }
 

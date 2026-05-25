@@ -6,25 +6,25 @@ import javax.xml.bind.annotation.XmlElement;
 
 @XmlAccessorType(XmlAccessType.FIELD)
 public class ClassXml {
-  @XmlElement(name = "id")
+  @XmlElement(name = "编号")
   private String id;
 
-  @XmlElement(name = "name")
+  @XmlElement(name = "名称")
   private String name;
 
-  @XmlElement(name = "time")
+  @XmlElement(name = "课时")
   private String time;
 
-  @XmlElement(name = "score")
+  @XmlElement(name = "学分")
   private String score;
 
-  @XmlElement(name = "teacher")
+  @XmlElement(name = "老师")
   private String teacher;
 
-  @XmlElement(name = "location")
+  @XmlElement(name = "地点")
   private String location;
 
-  @XmlElement(name = "share")
+  @XmlElement(name = "共享")
   private String share;
 
   public ClassXml() {}

@@ -65,6 +65,22 @@ Body（管理员）：
 
 `GET http://localhost:8082/api/internal/course/shared`
 
+返回的 `Data` 内部为 B 端格式：
+
+```xml
+<Classes>
+  <class>
+    <编号>B001</编号>
+    <名称>高等数学</名称>
+    <课时>32</课时>
+    <学分>4</学分>
+    <老师>张三</老师>
+    <地点>一教-101</地点>
+    <共享>Y</共享>
+  </class>
+</Classes>
+```
+
 ### 2) 跨系选课
 
 请求：
@@ -77,16 +93,15 @@ Body（XML）：
 <?xml version="1.0" encoding="UTF-8"?>
 <CrossDepartmentChoice>
   <Student>
-    <id>A2023001</id>
-    <name>张三</name>
-    <sex>男</sex>
-    <major>软件学院</major>
-    <origin>A</origin>
+    <学号>A2023001</学号>
+    <姓名>张三</姓名>
+    <性别>男</性别>
+    <专业>软件学院</专业>
   </Student>
   <Choice>
-    <cid>B001</cid>
-    <sid>A2023001</sid>
-    <score></score>
+    <课程编号>B001</课程编号>
+    <学号>A2023001</学号>
+    <得分></得分>
   </Choice>
 </CrossDepartmentChoice>
 ```
@@ -95,5 +110,5 @@ Body（XML）：
 
 `POST http://localhost:8082/api/internal/course/drop`
 
-Body 同上（只要 `Choice.cid/Choice.sid` 有值即可）。
+Body 同上（只要 Choice 中的课程编号与学号字段有值即可）。
 

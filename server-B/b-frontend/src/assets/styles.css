@@ -374,7 +374,7 @@ button:disabled {
 .button-row {
   display: flex;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .action-btn {
@@ -384,6 +384,8 @@ button:disabled {
   border: 1px solid #d1d5db;
   background: #f9fafb;
   color: #111827;
+  min-width: 64px;
+  white-space: nowrap;
 }
 
 .action-btn:disabled {

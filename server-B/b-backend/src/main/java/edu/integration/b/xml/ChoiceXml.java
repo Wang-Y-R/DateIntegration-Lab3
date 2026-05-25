@@ -6,13 +6,13 @@ import javax.xml.bind.annotation.XmlElement;
 
 @XmlAccessorType(XmlAccessType.FIELD)
 public class ChoiceXml {
-  @XmlElement(name = "cid", required = true)
+  @XmlElement(name = "Cid", required = true)
   private String cid;
 
-  @XmlElement(name = "sid", required = true)
+  @XmlElement(name = "Sno", required = true)
   private String sid;
 
-  @XmlElement(name = "score")
+  @XmlElement(name = "Grd")
   private String score;
 
   public ChoiceXml() {}

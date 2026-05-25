@@ -1,5 +1,5 @@
 server:
-  port: 8083
+  port: 8082
 
 spring:
   application:
@@ -20,4 +20,8 @@ spring:
 logging:
   level:
     edu.integration.b: INFO
+
+integration:
+  server:
+    base-url: http://localhost:8080
 

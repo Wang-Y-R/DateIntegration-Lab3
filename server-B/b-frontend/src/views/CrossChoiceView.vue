@@ -73,7 +73,7 @@
         </form>
         <p class="help-text">提交后会发送跨系请求，并刷新可选课程列表。</p>
         <div class="button-row">
-          <button class="primary" @click="submitRequest">提交请求</button>
+          <button type="button" class="primary" @click="submitCurrent">提交请求</button>
           <button class="ghost" @click="loadSharedCourses" :disabled="loading.courses">
             {{ loading.courses ? '加载中...' : '获取可选课程' }}
           </button>
@@ -113,7 +113,24 @@
               <td>{{ row.teacher }}</td>
               <td>{{ row.location }}</td>
               <td>
-                <button class="action-btn action-primary" @click="useCourse(row)">选课</button>
+                <button
+                  v-if="isChosen(row)"
+                  type="button"
+                  class="action-btn action-danger"
+                  @click="dropChosenCourse(row)"
+                  :disabled="loading.courses || submitting"
+                >
+                  退课并提交
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  class="action-btn action-primary"
+                  @click="useCourse(row)"
+                  :disabled="loading.courses || submitting"
+                >
+                  选课并提交
+                </button>
               </td>
             </tr>
           </tbody>
@@ -125,9 +142,10 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { CHOICE_UPDATE_EVENT, emitChoiceUpdate, requestJson } from "../api";
 
-const baseUrl = import.meta.env.VITE_API_BASE || "http://localhost:8083";
+const baseUrl = import.meta.env.VITE_API_BASE || "http://localhost:8082";
 
 const form = reactive({
   destination: "A",
@@ -142,25 +160,49 @@ const form = reactive({
 
 const xmlPayload = ref("");
 const sharedCourses = ref([]);
+const myChoices = ref([]);
+const user = ref(null);
 const loading = reactive({ courses: false });
+const submitting = ref(false);
 const message = reactive({ text: "", ok: true });
+const selectedCourse = ref(null);
+
+const resolveSno = () => form.sid || "";
+
+const chosenIdSet = computed(() => new Set(myChoices.value.map((row) => row.id)));
+
+const isChosen = (row) => chosenIdSet.value.has(row.id);
 
 const generateXml = () => {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<CrossDepartmentChoice>\n  <Student>\n    <id>${form.sid}</id>\n    <name>${form.name}</name>\n    <sex>${form.sex}</sex>\n    <major>${form.major}</major>\n    <origin>B</origin>\n  </Student>\n  <Choice>\n    <cid>${form.cid}</cid>\n    <sid>${form.sid}</sid>\n    <score>${form.score}</score>\n  </Choice>\n</CrossDepartmentChoice>`;
+  const profile = user.value?.profile || user.value || {};
+  const origin = profile.origin || profile.Origin || "";
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<CrossDepartmentChoice>\n  <Student>\n    <Sno>${form.sid}</Sno>\n    <Snm>${form.name}</Snm>\n    <Sex>${form.sex}</Sex>\n    <Sde>${form.major}</Sde>${origin ? `\n    <Origin>${origin}</Origin>` : ""}\n  </Student>\n  <Choice>\n    <Cid>${form.cid}</Cid>\n    <Sno>${form.sid}</Sno>\n    <Grd>${form.score}</Grd>\n  </Choice>\n</CrossDepartmentChoice>`;
   xmlPayload.value = xml;
   return xml;
 };
 
 const submitRequest = async () => {
+  console.log("submitRequest start", {
+    baseUrl,
+    action: form.action,
+    destination: form.destination,
+    sid: form.sid,
+    cid: form.cid,
+    score: form.score,
+    xmlPayload: xmlPayload.value,
+  });
   message.text = "";
   const xml = xmlPayload.value || generateXml();
+  submitting.value = true;
   if (!baseUrl) {
     message.ok = false;
     message.text = "未配置集成服务器地址，已保存申请草稿。";
+    submitting.value = false;
     return;
   }
   try {
-    const endpoint = form.action === "drop" ? "/api/integrated/course/drop" : "/api/integrated/course/choose";
+    const endpoint = form.action === "drop" ? "/api/proxy/integrated/course/drop" : "/api/proxy/integrated/course/choose";
+    console.log("submitRequest fetch", `${baseUrl}${endpoint}`);
     const res = await fetch(`${baseUrl}${endpoint}`, {
       method: "POST",
       headers: {
@@ -171,29 +213,133 @@ const submitRequest = async () => {
       body: xml
     });
     const text = await res.text();
+    console.log("submitRequest response", res.status, text);
     message.ok = res.ok;
     message.text = res.ok ? "请求已发送，正在获取课程列表。" : "请求失败，请检查接口。";
     if (res.ok) {
+      await syncCrossChoiceMirror();
+      // refresh shared courses list
       await loadSharedCourses();
+      await loadMyChoices();
+      emitChoiceUpdate();
+      // try to refresh local student's choices so UI reflects newly added course
+      try {
+        const choicesRes = await fetch(`${baseUrl}/api/local/choices?sno=${encodeURIComponent(form.sid)}`);
+        if (choicesRes.ok) {
+          const json = await choicesRes.json();
+          // json structure: { code, message, data }
+          const data = json?.data || null;
+          if (data) {
+            message.text = `请求已处理。当前已选 ${Array.isArray(data) ? data.length : 'N'} 门课程`;
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
     }
   } catch (err) {
     message.ok = false;
     message.text = err?.message || "网络错误";
+  } finally {
+    submitting.value = false;
   }
 };
 
-const useCourse = (row) => {
+const useCourse = async (row) => {
   console.log("useCourse selected:", row);
+  selectedCourse.value = row;
   form.cid = row.id || "";
-  form.name = row.name || form.name;
+  form.action = "choose";
   generateXml();
   message.ok = true;
-  message.text = `已选择课程 ${form.cid} ${form.name}`;
+  message.text = `已选择课程 ${form.cid} ${row.name || ""}`;
+  await submitRequest();
+};
+
+const dropChosenCourse = async (row) => {
+  console.log("dropChosenCourse selected:", row);
+  selectedCourse.value = row;
+  form.cid = row.id || "";
+  form.action = "drop";
+  generateXml();
+  message.ok = true;
+  message.text = `已准备退课 ${form.cid} ${row.name || ""}`;
+  await submitRequest();
+};
+
+const submitCurrent = async () => {
+  console.log("submitCurrent clicked");
+  await submitRequest();
+};
+
+const syncCrossChoiceMirror = async () => {
+  if (form.destination === "B") {
+    return;
+  }
+  if (!form.sid || !form.cid) {
+    return;
+  }
+  const course = selectedCourse.value || sharedCourses.value.find((row) => row.id === form.cid);
+  if (form.action === "drop") {
+    try {
+      await fetch(`${baseUrl}/api/local/cross-choice/sync`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          action: "drop",
+          sno: form.sid,
+          cno: form.cid,
+          destSystem: form.destination
+        })
+      });
+    } catch (err) {
+      console.warn("syncCrossChoiceMirror drop failed", err);
+    }
+    return;
+  }
+  if (!course) {
+    return;
+  }
+  try {
+    await fetch(`${baseUrl}/api/local/cross-choice/sync`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        action: form.action,
+        sno: form.sid,
+        cno: form.cid,
+        destSystem: form.destination,
+        cnm: course.name || "",
+        ctm: course.time || "",
+        cpt: course.score || "",
+        tec: course.teacher || "",
+        pla: course.location || "",
+        share: course.share || "1",
+        grd: form.score || ""
+      })
+    });
+  } catch (err) {
+    console.warn("syncCrossChoiceMirror failed", err);
+  }
 };
 
 const getText = (node, tag) => {
   const el = node.getElementsByTagName(tag)[0];
   return el ? el.textContent || "" : "";
+};
+
+const getFirstText = (node, tags) => {
+  for (const tag of tags) {
+    const value = getText(node, tag);
+    if (value) {
+      return value;
+    }
+  }
+  return "";
 };
 
 const parseCourseXml = (xmlText) => {
@@ -203,14 +349,22 @@ const parseCourseXml = (xmlText) => {
 
   const nodes = Array.from(doc.getElementsByTagName("class"));
   return nodes.map((node) => ({
-    id: getText(node, "id"),
-    name: getText(node, "name"),
-    time: getText(node, "time"),
-    score: getText(node, "score"),
-    teacher: getText(node, "teacher"),
-    location: getText(node, "location"),
-    share: getText(node, "share")
+    id: getFirstText(node, ["id", "编号", "课程编号"]),
+    name: getFirstText(node, ["name", "名称"]),
+    time: getFirstText(node, ["time", "课时"]),
+    score: getFirstText(node, ["score", "学分"]),
+    teacher: getFirstText(node, ["teacher", "老师"]),
+    location: getFirstText(node, ["location", "地点"]),
+    share: getFirstText(node, ["share", "共享"])
   }));
+};
+
+const parseResponseMessage = (xmlText) => {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, "application/xml");
+  if (doc.querySelector("parsererror")) return "";
+  const msg = doc.getElementsByTagName("Message")[0];
+  return msg ? msg.textContent || "" : "";
 };
 
 const loadSharedCourses = async () => {
@@ -221,23 +375,24 @@ const loadSharedCourses = async () => {
   }
   loading.courses = true;
   try {
-    const res = await fetch(`${baseUrl}/api/integrated/course/shared`, {
+    const res = await fetch(`${baseUrl}/api/proxy/integrated/course/shared`, {
       method: "GET",
       headers: {
         SourceSystem: "B"
       }
     });
     const text = await res.text();
+    const respMessage = parseResponseMessage(text);
     if (!res.ok) {
       sharedCourses.value = [];
       message.ok = false;
-      message.text = "课程列表获取失败，请检查集成接口。";
+      message.text = respMessage || "课程列表获取失败，请检查集成接口。";
       return;
     }
     sharedCourses.value = parseCourseXml(text);
     if (!sharedCourses.value.length) {
       message.ok = false;
-      message.text = "未解析到课程数据，请确认返回格式。";
+      message.text = respMessage || "未解析到课程数据，请确认返回格式。";
       return;
     }
     message.text = "";
@@ -250,14 +405,44 @@ const loadSharedCourses = async () => {
   }
 };
 
+const normalizeChoices = (rows) =>
+  rows.map((row) => ({
+    id: row.CNO || row.cno || row.ID || row.id,
+    source: row.SOURCE || row.source || "LOCAL",
+    destSystem: row.DEST_SYSTEM || row.destSystem || ""
+  }));
+
+const loadMyChoices = async () => {
+  const sno = resolveSno();
+  if (!sno) {
+    myChoices.value = [];
+    return;
+  }
+  try {
+    const body = await requestJson(`/api/local/choices?sno=${encodeURIComponent(sno)}`);
+    myChoices.value = normalizeChoices(body.data || []);
+  } catch (err) {
+    myChoices.value = [];
+  }
+};
+
 onMounted(() => {
   const stored = localStorage.getItem("b-user");
   const userPayload = stored ? JSON.parse(stored) : {};
+  user.value = userPayload;
   const profile = userPayload?.profile || userPayload || {};
   form.sid = profile.sno || profile.SNO || form.sid;
   form.name = profile.snm || profile.name || form.name;
   form.sex = profile.sex || form.sex;
   form.major = profile.major || form.major;
   loadSharedCourses();
+  loadMyChoices();
+  window.addEventListener(CHOICE_UPDATE_EVENT, loadSharedCourses);
+  window.addEventListener(CHOICE_UPDATE_EVENT, loadMyChoices);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener(CHOICE_UPDATE_EVENT, loadSharedCourses);
+  window.removeEventListener(CHOICE_UPDATE_EVENT, loadMyChoices);
 });
 </script>
