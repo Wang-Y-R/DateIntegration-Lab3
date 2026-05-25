@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -92,7 +93,69 @@ public class IntegrationController {
             @RequestHeader("SourceSystem") String source,
             @RequestHeader("DestinationSystem") String destination,
             @RequestBody String body) {
+        return forwardCrossCourse(source, destination, body, "choose");
+    }
 
+    /**
+     * POST /api/integrated/course/drop
+     * 跨院系退选：格式转换后转发至目标院系 /api/internal/course/drop
+     */
+    @PostMapping(value = "/course/drop",
+            consumes = "application/xml;charset=UTF-8",
+            produces = "application/xml;charset=UTF-8")
+    public String dropCourse(
+            @RequestHeader("SourceSystem") String source,
+            @RequestHeader("DestinationSystem") String destination,
+            @RequestBody String body) {
+        return forwardCrossCourse(source, destination, body, "drop");
+    }
+
+    /**
+     * GET /api/integrated/statistics
+     * 汇总各院系 /api/internal/statistics 返回的 JSON 统计
+     */
+    @GetMapping(value = "/statistics", produces = MediaType.APPLICATION_JSON_VALUE)
+    public Map<String, Object> getStatistics() {
+        Map<String, String> serverUrls = Map.of("A", serverAUrl, "B", serverBUrl, "C", serverCUrl);
+        int students = 0;
+        int courses = 0;
+        int enrollments = 0;
+        List<String> colleges = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+
+        for (Map.Entry<String, String> entry : serverUrls.entrySet()) {
+            try {
+                String url = entry.getValue() + "/api/internal/statistics";
+                ResponseEntity<Map> resp = restTemplate.getForEntity(url, Map.class);
+                Map<?, ?> body = resp.getBody();
+                if (body == null || !resp.getStatusCode().is2xxSuccessful()) {
+                    errors.add(entry.getKey() + ": 无响应");
+                    continue;
+                }
+                students += toInt(body.get("students"));
+                courses += toInt(body.get("courses"));
+                enrollments += toInt(body.get("enrollments"));
+                colleges.add(entry.getKey());
+            } catch (Exception e) {
+                errors.add(entry.getKey() + ": " + e.getMessage());
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("students", students);
+        result.put("studentCount", students);
+        result.put("courses", courses);
+        result.put("courseCount", courses);
+        result.put("enrollments", enrollments);
+        result.put("selectionCount", enrollments);
+        result.put("colleges", colleges);
+        if (!errors.isEmpty()) {
+            result.put("warnings", errors);
+        }
+        return result;
+    }
+
+    private String forwardCrossCourse(String source, String destination, String body, String action) {
         Map<String, String> serverUrls = Map.of("A", serverAUrl, "B", serverBUrl, "C", serverCUrl);
 
         if (!serverUrls.containsKey(destination)) {
@@ -104,32 +167,27 @@ public class IntegrationController {
                 return xmlService.buildResponse("400", "XML格式校验失败：缺少Student或Choice节点", null);
             }
 
-            // 1. Extract <Student> and <Choice> fragments from CrossDepartmentChoice
             String studentFrag = extractElement(body, "Student");
             String choiceFrag = extractElement(body, "Choice");
 
-            // 2. Wrap into list roots expected by format XSLs
             String studentsXml = "<Students><Student>" + studentFrag + "</Student></Students>";
             String choicesXml = "<choices><choice>" + choiceFrag + "</choice></choices>";
-            
-            // 3. source format → unified format
+
             String uniStudents = xmlService.transform(studentsXml, "formatStudent.xsl");
             String uniChoices = xmlService.transform(choicesXml, "formatClassChoice.xsl");
 
-            // 4. unified format → destination format
             String destStudents = xmlService.transform(uniStudents, "studentTo" + destination + ".xsl");
             String destChoices = xmlService.transform(uniChoices, "choiceTo" + destination + ".xsl");
 
-            // 5. Re-assemble CrossDepartmentChoice for destination server
             String destStudentInner = extractElement(destStudents, "student");
             String destChoiceInner = extractElement(destChoices, "choice");
             String transformed = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<CrossDepartmentChoice>\n    <Student>"
                     + destStudentInner + "</Student>\n    <Choice>" + destChoiceInner + "</Choice>\n</CrossDepartmentChoice>";
 
-            // Forward to destination server
-            String url = serverUrls.get(destination) + "/api/internal/course/choose";
+            String url = serverUrls.get(destination) + "/api/internal/course/" + action;
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.parseMediaType("application/xml;charset=UTF-8"));
+            headers.set("SourceSystem", source);
             HttpEntity<String> request = new HttpEntity<>(transformed, headers);
 
             ResponseEntity<String> resp = restTemplate.postForEntity(url, request, String.class);
@@ -138,6 +196,20 @@ public class IntegrationController {
 
         } catch (Exception e) {
             return xmlService.buildResponse("400", "处理失败: " + e.getMessage(), null);
+        }
+    }
+
+    private static int toInt(Object value) {
+        if (value == null) {
+            return 0;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        try {
+            return Integer.parseInt(value.toString());
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 
