@@ -1,4 +1,3 @@
-import random
 import tkinter as tk
 from collections import Counter
 from pathlib import Path
@@ -6,8 +5,8 @@ from tkinter import filedialog, messagebox, ttk
 from xml.dom import minidom
 import xml.etree.ElementTree as ET
 
-import pymysql
-
+from db import Database, TERM
+from db_schema import COLLEGE_C, COLLEGE_DEPARTMENT, COURSE_COLS, DB_CONFIG, DEPT_NO, GROUP_NO, SC_COLS
 from integration_api import (
     DEFAULT_INTEGRATION_URL,
     DEFAULT_PROVIDER_PORT,
@@ -22,258 +21,18 @@ EXPORT_DIR = DATA_DIR / "exports"
 IMPORT_DIR = DATA_DIR / "imports"
 SAMPLE_DIR = DATA_DIR / "samples"
 
-DB_CONFIG = {
-    "host": "sql.wsfdb.cn",
-    "port": 3306,
-    "user": "zhongyixiaStudentSystem",
-    "password": "zz050108",
-    "database": "zhongyixiaStudentSystem",
-    "charset": "utf8mb4",
-    "autocommit": True,
-    "cursorclass": pymysql.cursors.DictCursor,
-}
-
 APP_USERS = [("admin", "123456"), ("teacher", "123456")]
-COLLEGE_C = "C"
-TERM = "2025-2026-2"
-GRADE_LIMITS = {"C000000": 4, "C000001": 5, "C000002": 6, "C000003": 7}
 
 
-class Database:
-    def __init__(self, config):
-        self.config = config
+def student_to_integration_xml(row: dict) -> dict:
+    """数据库 student 行 → 集成服务器 XML 字段（Sno/Snm 等）。"""
+    return {
+        "Sno": row.get("student_id", ""),
+        "Snm": row.get("student_name", ""),
+        "Sex": row.get("gender", ""),
+        "Sde": row.get("department", ""),
+    }
 
-    def connect(self):
-        return pymysql.connect(**self.config)
-
-    def execute(self, sql, params=None, fetch=False, many=False):
-        with self.connect() as conn:
-            with conn.cursor() as cur:
-                if many:
-                    cur.executemany(sql, params)
-                else:
-                    cur.execute(sql, params)
-                return cur.fetchall() if fetch else cur.rowcount
-
-    def _table_exists(self, table: str) -> bool:
-        rows = self.execute(
-            "SELECT COUNT(*) AS total FROM information_schema.TABLES "
-            "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
-            (self.config["database"], table),
-            fetch=True,
-        )
-        return rows[0]["total"] > 0
-
-    def _column_exists(self, table: str, column: str) -> bool:
-        rows = self.execute(
-            "SELECT COUNT(*) AS total FROM information_schema.COLUMNS "
-            "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_NAME=%s",
-            (self.config["database"], table, column),
-            fetch=True,
-        )
-        return rows[0]["total"] > 0
-
-    def _table_has_columns(self, table: str, columns: list[str]) -> bool:
-        if not self._table_exists(table):
-            return False
-        return all(self._column_exists(table, col) for col in columns)
-
-    def repair_schema(self):
-        """修复远程库中旧版表结构（缺少 Cno 等字段时重建集成相关表）。"""
-        core_required = {
-            "c_courses": ["Cno", "Cnn", "Crd", "Cpt", "Tec", "Pla", "Share"],
-            "c_students": ["Sno", "Snn", "Sex", "Sde", "Pwd"],
-            "c_sc": ["Cno", "Sno", "Grd"],
-        }
-        integration_tables = [
-            "inbound_cross_enrollments",
-            "cross_college_selections",
-            "imported_shared_courses",
-        ]
-        integration_required = {
-            "imported_shared_courses": [
-                "source_college",
-                "Cno",
-                "Cnn",
-                "Crd",
-                "Cpt",
-                "Tec",
-                "Pla",
-                "xml_path",
-            ],
-            "cross_college_selections": [
-                "source_college",
-                "Sno",
-                "Cno",
-                "term_name",
-                "status",
-            ],
-            "inbound_cross_enrollments": [
-                "source_college",
-                "Sno",
-                "Snn",
-                "Cno",
-                "Cnn",
-                "term_name",
-                "status",
-                "xml_path",
-            ],
-        }
-
-        core_broken = any(
-            self._table_exists(table) and not self._table_has_columns(table, cols)
-            for table, cols in core_required.items()
-        )
-        if core_broken:
-            for table in [
-                "inbound_cross_enrollments",
-                "cross_college_selections",
-                "imported_shared_courses",
-                "c_sc",
-                "c_courses",
-                "c_students",
-                "c_accounts",
-            ]:
-                self.execute(f"DROP TABLE IF EXISTS {table}")
-
-        for table in integration_tables:
-            cols = integration_required[table]
-            if self._table_exists(table) and not self._table_has_columns(table, cols):
-                self.execute(f"DROP TABLE IF EXISTS {table}")
-
-    def initialize_schema(self):
-        self.repair_schema()
-        statements = [
-            "CREATE TABLE IF NOT EXISTS c_accounts (acc VARCHAR(12) PRIMARY KEY, passwd VARCHAR(12) NOT NULL, CreateDate TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
-            "CREATE TABLE IF NOT EXISTS c_students (Sno VARCHAR(9) PRIMARY KEY, Snn VARCHAR(10) NOT NULL, Sex VARCHAR(1) NOT NULL, Sde VARCHAR(6) NOT NULL, Pwd CHAR(6) NOT NULL)",
-            "CREATE TABLE IF NOT EXISTS c_courses (Cno VARCHAR(16) PRIMARY KEY, Cnn VARCHAR(20) NOT NULL, Crd INT NOT NULL, Cpt INT NOT NULL, Tec VARCHAR(20) NOT NULL, Pla VARCHAR(30) NOT NULL, Share CHAR(1) NOT NULL)",
-            "CREATE TABLE IF NOT EXISTS c_sc (Cno VARCHAR(16) NOT NULL, Sno VARCHAR(9) NOT NULL, Grd INT NOT NULL DEFAULT 0, PRIMARY KEY (Cno, Sno))",
-            "CREATE TABLE IF NOT EXISTS imported_shared_courses (source_college VARCHAR(5) NOT NULL, Cno VARCHAR(16) NOT NULL, Cnn VARCHAR(30) NOT NULL, Crd INT NOT NULL, Cpt INT NOT NULL, Tec VARCHAR(20) NOT NULL, Pla VARCHAR(30) NOT NULL, xml_path VARCHAR(255) NOT NULL, PRIMARY KEY (source_college, Cno))",
-            "CREATE TABLE IF NOT EXISTS cross_college_selections (source_college VARCHAR(5) NOT NULL, Sno VARCHAR(9) NOT NULL, Cno VARCHAR(16) NOT NULL, term_name VARCHAR(30) NOT NULL, status VARCHAR(20) NOT NULL, PRIMARY KEY (source_college, Sno, Cno, term_name))",
-            "CREATE TABLE IF NOT EXISTS inbound_cross_enrollments (source_college VARCHAR(5) NOT NULL, Sno VARCHAR(9) NOT NULL, Snn VARCHAR(20) NOT NULL, Cno VARCHAR(16) NOT NULL, Cnn VARCHAR(30) NOT NULL, term_name VARCHAR(30) NOT NULL, status VARCHAR(20) NOT NULL, xml_path VARCHAR(255) NOT NULL, PRIMARY KEY (source_college, Sno, Cno, term_name))",
-        ]
-        for sql in statements:
-            self.execute(sql)
-
-    def seed_base_data(self):
-        for table in ['inbound_cross_enrollments', 'cross_college_selections', 'imported_shared_courses', 'c_sc', 'c_courses', 'c_students', 'c_accounts']:
-            self.execute(f"DELETE FROM {table}")
-        self.execute("INSERT INTO c_accounts (acc, passwd) VALUES (%s, %s)", APP_USERS, many=True)
-        depts = ['CS', 'SE', 'AI', 'IS', 'NE']
-        students = [(f"C{i:08d}"[:9], f"学生{i:02d}", '男' if i % 2 else '女', depts[(i - 1) % 5], f"{100000 + i}"[-6:]) for i in range(1, 51)]
-        self.execute("INSERT INTO c_students (Sno, Snn, Sex, Sde, Pwd) VALUES (%s, %s, %s, %s, %s)", students, many=True)
-        names = ['数据库', '数据结构', '计网', '操作系统', 'Python', '机器学习', 'Web开发', '信息系统', '软件测试', '数据集成']
-        teachers = ['王老师', '李老师', '赵老师', '陈老师', '孙老师']
-        places = ['一教101', '一教202', '二教305', '实验楼201', '实验楼403']
-        courses = [(f"C{i:03d}", n, 2 + i % 3, 16 + i, teachers[(i - 1) % 5], places[(i - 1) % 5], 'Y' if i <= 6 else 'N') for i, n in enumerate(names, 1)]
-        self.execute("INSERT INTO c_courses (Cno, Cnn, Crd, Cpt, Tec, Pla, Share) VALUES (%s, %s, %s, %s, %s, %s, %s)", courses, many=True)
-        cnos = [c[0] for c in courses]
-        picks = []
-        for i, stu in enumerate(students, 1):
-            random.seed(i)
-            for cno in random.sample(cnos, 5):
-                picks.append((cno, stu[0], 0))
-        self.execute("INSERT INTO c_sc (Cno, Sno, Grd) VALUES (%s, %s, %s)", picks, many=True)
-
-    def validate_login(self, acc, passwd):
-        rows = self.execute("SELECT acc FROM c_accounts WHERE acc=%s AND passwd=%s", (acc, passwd), fetch=True)
-        if rows:
-            return {"account": rows[0]["acc"], "role": "admin"}
-        rows = self.execute("SELECT Sno, Snn FROM c_students WHERE Sno=%s AND Pwd=%s", (acc, passwd), fetch=True)
-        if rows:
-            return {"account": rows[0]["Sno"], "role": "student", "name": rows[0]["Snn"]}
-        return None
-
-    def has_initialized_users(self):
-        return self.execute("SELECT COUNT(*) total FROM c_accounts", fetch=True)[0]['total'] > 0
-
-    def get_student_profile(self, sno):
-        rows = self.execute("SELECT Sno, Snn, Sex, Sde, Pwd FROM c_students WHERE Sno=%s", (sno,), fetch=True)
-        return rows[0] if rows else None
-
-    def update_student_profile(self, sno, snn, sex, sde, pwd):
-        return self.execute(
-            "UPDATE c_students SET Snn=%s, Sex=%s, Sde=%s, Pwd=%s WHERE Sno=%s",
-            (snn, sex, sde, pwd, sno),
-        )
-
-    def get_students(self):
-        return self.execute("SELECT Sno, Snn, Sex, Sde, Pwd FROM c_students ORDER BY Sno", fetch=True)
-
-    def get_courses(self):
-        return self.execute("SELECT Cno, Cnn, Crd, Cpt, Tec, Pla, Share FROM c_courses ORDER BY Cno", fetch=True)
-
-    def get_shared_courses(self):
-        return self.execute("SELECT Cno, Cnn, Crd, Cpt, Tec, Pla FROM c_courses WHERE Share='Y' ORDER BY Cno", fetch=True)
-
-    def get_local_selectable_courses(self):
-        return self.execute("SELECT Cno, Cnn, Crd, Cpt, Tec, Pla FROM c_courses WHERE Share='Y' ORDER BY Cno", fetch=True)
-
-    def count_student_active_courses(self, sno):
-        local_total = self.execute("SELECT COUNT(*) total FROM c_sc WHERE Sno=%s AND Grd >= 0", (sno,), fetch=True)[0]["total"]
-        cross_total = self.execute("SELECT COUNT(*) total FROM cross_college_selections WHERE Sno=%s AND status<>'已退选'", (sno,), fetch=True)[0]["total"]
-        return local_total + cross_total
-
-    def add_local_course_for_student(self, sno, cno):
-        self.execute("INSERT INTO c_sc (Cno, Sno, Grd) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE Grd=0", (cno, sno, 0))
-
-    def remove_local_course_for_student(self, sno, cno):
-        count = self.execute("UPDATE c_sc SET Grd=-1 WHERE Sno=%s AND Cno=%s", (sno, cno))
-        if count == 0:
-            raise ValueError("未找到对应本院选课记录。")
-
-    def get_enrollments(self):
-        local_rows = self.execute("SELECT s.Sno, s.Snn, sc.Cno, c.Cnn, 'C' source_college, %s term_name, CASE WHEN sc.Grd < 0 THEN '已退选' ELSE '已选' END status FROM c_sc sc JOIN c_students s ON s.Sno=sc.Sno JOIN c_courses c ON c.Cno=sc.Cno ORDER BY s.Sno, sc.Cno", (TERM,), fetch=True)
-        cross_rows = self.execute("SELECT s.Sno, s.Snn, cs.Cno, i.Cnn, cs.source_college, cs.term_name, cs.status FROM cross_college_selections cs JOIN c_students s ON s.Sno=cs.Sno JOIN imported_shared_courses i ON i.source_college=cs.source_college AND i.Cno=cs.Cno ORDER BY s.Sno, cs.Cno", fetch=True)
-        return local_rows + cross_rows
-
-    def get_imported_shared_courses(self):
-        return self.execute("SELECT source_college, Cno, Cnn, Tec, Crd, Cpt FROM imported_shared_courses ORDER BY source_college, Cno", fetch=True)
-
-    def get_inbound_cross_enrollments(self):
-        return self.execute("SELECT source_college, Sno, Snn, Cno, Cnn, term_name, status FROM inbound_cross_enrollments ORDER BY source_college, Sno", fetch=True)
-
-    def import_shared_courses(self, rows, xml_path):
-        sql = "INSERT INTO imported_shared_courses (source_college, Cno, Cnn, Crd, Cpt, Tec, Pla, xml_path) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE Cnn=VALUES(Cnn), Crd=VALUES(Crd), Cpt=VALUES(Cpt), Tec=VALUES(Tec), Pla=VALUES(Pla), xml_path=VALUES(xml_path)"
-        params = [(r['source_college'], r['Cno'], r['Cnn'], r['Crd'], r['Cpt'], r['Tec'], r['Pla'], xml_path) for r in rows]
-        if params:
-            self.execute(sql, params, many=True)
-
-    def import_inbound_selections(self, rows, xml_path):
-        sql = "INSERT INTO inbound_cross_enrollments (source_college, Sno, Snn, Cno, Cnn, term_name, status, xml_path) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE Snn=VALUES(Snn), Cnn=VALUES(Cnn), status=VALUES(status), xml_path=VALUES(xml_path)"
-        params = [(r['source_college'], r['Sno'], r['Snn'], r['Cno'], r['Cnn'], r['term_name'], r['status'], xml_path) for r in rows]
-        if params:
-            self.execute(sql, params, many=True)
-
-    def add_cross_college_enrollment(self, sno, source_college, cno, term_name):
-        self.check_student_course_limit(sno)
-        if not self.execute("SELECT Sno FROM c_students WHERE Sno=%s", (sno,), fetch=True):
-            raise ValueError('学生不存在。')
-        if not self.execute("SELECT Cno FROM imported_shared_courses WHERE source_college=%s AND Cno=%s", (source_college, cno), fetch=True):
-            raise ValueError('共享课程不存在，请先导入课程XML。')
-        self.execute("INSERT INTO cross_college_selections (source_college, Sno, Cno, term_name, status) VALUES (%s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE status=VALUES(status)", (source_college, sno, cno, term_name, '跨校已选'))
-
-    def drop_enrollment(self, sno, cno, source_college, term_name):
-        count = self.execute("UPDATE c_sc SET Grd=-1 WHERE Sno=%s AND Cno=%s", (sno, cno)) if source_college == COLLEGE_C else self.execute("UPDATE cross_college_selections SET status='已退选' WHERE Sno=%s AND Cno=%s AND source_college=%s AND term_name=%s", (sno, cno, source_college, term_name))
-        if count == 0:
-            raise ValueError('未找到对应选课记录。')
-
-    @staticmethod
-    def get_student_course_limit(sno):
-        return GRADE_LIMITS.get(sno[:7], 5)
-
-    def check_student_course_limit(self, sno):
-        current = self.count_student_active_courses(sno)
-        limit = self.get_student_course_limit(sno)
-        if current >= limit:
-            raise ValueError(f"当前年级最多只能选择 {limit} 门课程。")
-
-    def get_local_stats(self):
-        return {
-            'students': self.execute("SELECT COUNT(*) total FROM c_students", fetch=True)[0]['total'],
-            'courses': self.execute("SELECT COUNT(*) total FROM c_courses", fetch=True)[0]['total'],
-            'enrollments': self.execute("SELECT COUNT(*) total FROM c_sc WHERE Grd >= 0", fetch=True)[0]['total'] + self.execute("SELECT COUNT(*) total FROM cross_college_selections WHERE status<>'已退选'", fetch=True)[0]['total'],
-        }
 
 class XmlService:
     def __init__(self, db):
@@ -293,8 +52,12 @@ class XmlService:
         root = ET.Element('sharedCourses', attrib={'college': COLLEGE_C, 'term': TERM})
         for row in self.db.get_shared_courses():
             node = ET.SubElement(root, 'course')
-            for key in ('Cno', 'Cnn', 'Crd', 'Cpt', 'Tec', 'Pla'):
-                ET.SubElement(node, key).text = str(row[key])
+            ET.SubElement(node, 'course_id').text = str(row['course_id'])
+            ET.SubElement(node, 'course_name').text = str(row['course_name'])
+            ET.SubElement(node, 'credit').text = str(row['credit'])
+            ET.SubElement(node, 'class_hours').text = str(row['class_hours'])
+            ET.SubElement(node, 'teacher_name').text = str(row['teacher_name'])
+            ET.SubElement(node, 'location').text = str(row['location'])
         return self.write_xml(root, EXPORT_DIR / 'college_c_shared_courses.xml')
 
     def import_shared_courses(self, path):
@@ -302,18 +65,36 @@ class XmlService:
         source_college = root.attrib.get('college', 'UNKNOWN')
         rows = []
         for node in root.findall('course'):
-            rows.append({'source_college': source_college, 'Cno': node.findtext('Cno', ''), 'Cnn': node.findtext('Cnn', ''), 'Crd': int(node.findtext('Crd', '0')), 'Cpt': int(node.findtext('Cpt', '0')), 'Tec': node.findtext('Tec', ''), 'Pla': node.findtext('Pla', '')})
+            rows.append({
+                'source_college': source_college,
+                'course_id': node.findtext('course_id', node.findtext('Cno', '')),
+                'course_name': node.findtext('course_name', node.findtext('Cnn', '')),
+                'credit': node.findtext('credit', node.findtext('Crd', '0')),
+                'class_hours': node.findtext('class_hours', node.findtext('Cpt', '16')),
+                'teacher_name': node.findtext('teacher_name', node.findtext('Tec', '')),
+                'location': node.findtext('location', node.findtext('Pla', '')),
+            })
         self.db.import_shared_courses(rows, str(path))
         return source_college, len(rows)
 
     def export_local_cross_selections(self):
-        rows = self.db.execute("SELECT cs.source_college, s.Sno, s.Snn, cs.Cno, i.Cnn, cs.term_name, cs.status FROM cross_college_selections cs JOIN c_students s ON s.Sno=cs.Sno JOIN imported_shared_courses i ON i.source_college=cs.source_college AND i.Cno=cs.Cno ORDER BY cs.source_college, s.Sno", fetch=True)
+        dept, group = DEPT_NO, GROUP_NO
+        rows = self.db.execute(
+            "SELECT cs.source_college, s.student_id, s.student_name, cs.course_id, i.course_name, "
+            "cs.term_name, cs.status FROM cross_college_selections cs "
+            "JOIN student s ON s.student_id=cs.student_id AND s.dept_no=cs.dept_no AND s.group_no=cs.group_no "
+            "JOIN imported_shared_courses i ON i.source_college=cs.source_college AND i.course_id=cs.course_id "
+            "AND i.dept_no=cs.dept_no AND i.group_no=cs.group_no "
+            "WHERE cs.dept_no=%s AND cs.group_no=%s ORDER BY cs.source_college, s.student_id",
+            (dept, group),
+            fetch=True,
+        )
         paths = []
         for college in sorted({r['source_college'] for r in rows}):
             root = ET.Element('crossCollegeSelections', attrib={'fromCollege': COLLEGE_C, 'toCollege': college, 'term': TERM})
             for row in [r for r in rows if r['source_college'] == college]:
                 node = ET.SubElement(root, 'selection')
-                for key in ('Sno', 'Snn', 'Cno', 'Cnn', 'term_name', 'status'):
+                for key in ('student_id', 'student_name', 'course_id', 'course_name', 'term_name', 'status'):
                     ET.SubElement(node, key).text = str(row[key])
             paths.append(self.write_xml(root, EXPORT_DIR / f"college_c_to_{college.lower()}_selections.xml"))
         return paths
@@ -323,15 +104,23 @@ class XmlService:
         source_college = root.attrib.get('fromCollege', 'UNKNOWN')
         rows = []
         for node in root.findall('selection'):
-            rows.append({'source_college': source_college, 'Sno': node.findtext('Sno', ''), 'Snn': node.findtext('Snn', ''), 'Cno': node.findtext('Cno', ''), 'Cnn': node.findtext('Cnn', ''), 'term_name': node.findtext('term_name', TERM), 'status': node.findtext('status', '已选')})
+            rows.append({
+                'source_college': source_college,
+                'student_id': node.findtext('student_id', node.findtext('Sno', '')),
+                'student_name': node.findtext('student_name', node.findtext('Snn', '')),
+                'course_id': node.findtext('course_id', node.findtext('Cno', '')),
+                'course_name': node.findtext('course_name', node.findtext('Cnn', '')),
+                'term_name': node.findtext('term_name', TERM),
+                'status': node.findtext('status', '已选'),
+            })
         self.db.import_inbound_selections(rows, str(path))
         return source_college, len(rows)
 
-    def export_drop_request(self, sno, cno, source_college, term_name):
+    def export_drop_request(self, student_id, course_id, source_college, term_name):
         root = ET.Element('dropRequest', attrib={'fromCollege': COLLEGE_C, 'toCollege': source_college, 'term': term_name})
-        for k, v in {'Sno': sno, 'Cno': cno, 'source_college': source_college, 'status': '已退选'}.items():
+        for k, v in {'student_id': student_id, 'course_id': course_id, 'source_college': source_college, 'status': '已退选'}.items():
             ET.SubElement(root, k).text = v
-        return self.write_xml(root, EXPORT_DIR / f'drop_{sno}_{source_college}_{cno}.xml')
+        return self.write_xml(root, EXPORT_DIR / f'drop_{student_id}_{source_college}_{course_id}.xml')
 
     def export_stats_snapshot(self):
         root = ET.Element('collegeStats', attrib={'college': COLLEGE_C, 'term': TERM})
@@ -384,7 +173,7 @@ class SystemCApp:
         card.place(relx=0.5, rely=0.5, anchor="center", width=460, height=330)
 
         tk.Label(card, text="系统C登录", font=("STHeiti", 24, "bold"), bg="white", fg="#1f3a5f").pack(pady=(30, 10))
-        tk.Label(card, text="学院C（MySQL）+ XML集成服务器", font=("STSong", 12), bg="white", fg="#5f6b7a").pack(pady=(0, 25))
+        tk.Label(card, text=f"学院C（MySQL hw4）组号 {GROUP_NO} + XML集成服务器", font=("STSong", 12), bg="white", fg="#5f6b7a").pack(pady=(0, 25))
 
         form = tk.Frame(card, bg="white")
         form.pack(padx=50, fill="x")
@@ -399,12 +188,15 @@ class SystemCApp:
 
         ttk.Button(card, text="登录系统", command=self.handle_login).pack(pady=25)
         tk.Label(card, text="默认账号：admin / 123456", bg="white", fg="#6b7280").pack()
+        tk.Label(card, text="学生示例：C202300001 / 100001（学号或 account 均可登录）", bg="white", fg="#6b7280").pack()
 
     def handle_login(self):
         try:
             self.db.initialize_schema()
             if not self.db.has_initialized_users():
                 self.db.seed_base_data()
+            else:
+                self.db.ensure_sc_sample_data()
         except Exception as exc:
             messagebox.showerror("数据库连接失败", str(exc))
             return
@@ -478,19 +270,96 @@ class SystemCApp:
     def build_init_tab(self):
         box = tk.Frame(self.tab_init, bg="white", bd=1, relief="solid")
         box.pack(fill="both", expand=True, padx=18, pady=18)
-        tk.Label(box, text="系统C初始化（严格按院系C表结构）", font=("STHeiti", 18, "bold"), bg="white", fg="#183b56").pack(anchor="w", padx=20, pady=(20, 12))
-        tk.Label(box, text="初始化后将生成 c_accounts、c_students、c_courses、c_sc 四张院系C原始表，以及集成过程辅助表。", bg="white", fg="#4b5563", justify="left").pack(anchor="w", padx=20)
+        tk.Label(box, text="系统C初始化（按提交文档：student / course / sc 表，含 group_no、dept_no）", font=("STHeiti", 18, "bold"), bg="white", fg="#183b56").pack(anchor="w", padx=20, pady=(20, 12))
+        tk.Label(box, text=f"数据库：hw4 @ 10.60.254.44 | 院系编号 dept_no={DEPT_NO} | 组号 group_no={GROUP_NO}", bg="white", fg="#4b5563", justify="left").pack(anchor="w", padx=20)
+        tk.Label(box, text="初始化仅清空并重建本组本院数据；集成辅助表按 group_no 隔离。", bg="white", fg="#4b5563", justify="left").pack(anchor="w", padx=20, pady=(4, 0))
         tk.Label(box, text="注意：重新初始化会清空「已导入共享课程」等集成数据，拉取外院课后请勿重复初始化。", bg="white", fg="#b45309", justify="left").pack(anchor="w", padx=20, pady=(8, 0))
         ttk.Button(box, text="初始化示例数据", command=self.initialize_demo_data).pack(anchor="w", padx=20, pady=20)
         self.init_text = tk.Text(box, height=24, bg="#0f172a", fg="#dbeafe")
         self.init_text.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
     def build_data_tab(self):
-        frame = tk.Frame(self.tab_data, bg="#f7fafc")
-        frame.pack(fill="both", expand=True, padx=10, pady=10)
-        self.student_tree = self.create_treeview(frame, ["Sno", "Snn", "Sex", "Sde", "Pwd"], "院系C学生表 c_students")
-        self.course_tree = self.create_treeview(frame, ["Cno", "Cnn", "Crd", "Cpt", "Tec", "Pla", "Share"], "院系C课程表 c_courses")
-        self.enrollment_tree = self.create_treeview(frame, ["Sno", "Snn", "Cno", "Cnn", "source_college", "term_name", "status"], "选课结果（本院+跨院）")
+        self.data_notebook = ttk.Notebook(self.tab_data)
+        self.data_notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        self.data_notebook.bind("<<NotebookTabChanged>>", self.on_data_tab_changed)
+
+        tab_student = tk.Frame(self.data_notebook, bg="#f7fafc")
+        tab_course = tk.Frame(self.data_notebook, bg="#f7fafc")
+        tab_sc = tk.Frame(self.data_notebook, bg="#f7fafc")
+        self.tab_course = tab_course
+        self.tab_sc = tab_sc
+        self.data_notebook.add(tab_student, text="学生 student")
+        self.data_notebook.add(tab_course, text="课程 course")
+        self.data_notebook.add(tab_sc, text="选课 sc")
+
+        self.student_tree = self.create_treeview(
+            tab_student,
+            ["student_id", "student_name", "gender", "department", "account", "password", "group_no", "dept_no"],
+            "学生表 student",
+            height=18,
+        )
+
+        tk.Label(
+            tab_course,
+            text="说明：share_flag=Y 表示对外共享（外院可通过集成选课）；N 表示不共享（仅本院学生可选）。",
+            bg="#f7fafc",
+            fg="#4b5563",
+            wraplength=900,
+            justify="left",
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        course_toolbar = tk.Frame(tab_course, bg="#f7fafc")
+        course_toolbar.pack(fill="x", padx=8, pady=(0, 4))
+        self.course_share_status_label = tk.Label(course_toolbar, text="", bg="#f7fafc", fg="#4b5563")
+        self.course_share_status_label.pack(side="left")
+        ttk.Button(course_toolbar, text="设为对外共享 (Y)", command=lambda: self.action_set_course_share("Y")).pack(side="right", padx=4)
+        ttk.Button(course_toolbar, text="设为不共享 (N)", command=lambda: self.action_set_course_share("N")).pack(side="right", padx=4)
+        ttk.Button(course_toolbar, text="刷新课程列表", command=self.refresh_course_views).pack(side="right", padx=4)
+
+        self.course_columns = [
+            "course_id",
+            "course_name",
+            "credit",
+            "teacher_name",
+            "location",
+            "share_flag",
+            "class_hours",
+            "practice_hours",
+            "group_no",
+            "dept_no",
+        ]
+        self.course_tree = self.create_treeview(
+            tab_course,
+            self.course_columns,
+            "课程表 course",
+            height=18,
+        )
+        self.course_tree.bind("<<TreeviewSelect>>", self.on_course_tree_select)
+
+        tk.Label(
+            tab_sc,
+            text="说明：本表仅限本院学生选修本院课程，数据写入提交库 hw4 的 sc 表；跨院选课请见「XML集成」。",
+            bg="#f7fafc",
+            fg="#b45309",
+            wraplength=900,
+            justify="left",
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        sc_toolbar = tk.Frame(tab_sc, bg="#f7fafc")
+        sc_toolbar.pack(fill="x", padx=8, pady=(0, 4))
+        self.sc_status_label = tk.Label(sc_toolbar, text="", bg="#f7fafc", fg="#4b5563")
+        self.sc_status_label.pack(side="left")
+        ttk.Button(sc_toolbar, text="修改成绩", command=self.action_edit_sc_score).pack(side="right", padx=4)
+        ttk.Button(sc_toolbar, text="补全选课示例数据", command=self.action_seed_sc_only).pack(side="right")
+
+        self.sc_columns = ["course_id", "student_id", "score", "group_no", "dept_no"]
+        self.sc_tree = self.create_treeview(
+            tab_sc,
+            self.sc_columns,
+            "选课表 sc（提交字段：course_id / student_id / score / group_no / dept_no）",
+            height=18,
+        )
+        self.sc_tree.bind("<<TreeviewSelect>>", self.on_sc_tree_select)
 
     def build_xml_tab(self):
         left = tk.Frame(self.tab_xml, bg="#f7fafc")
@@ -518,8 +387,18 @@ class SystemCApp:
         refresh_row = tk.Frame(right, bg="#f7fafc")
         refresh_row.pack(fill="x", padx=8, pady=(0, 4))
         ttk.Button(refresh_row, text="刷新导入课程列表", command=self.refresh_imported_views).pack(anchor="e")
-        self.shared_course_tree = self.create_treeview(right, ["source_college", "Cno", "Cnn", "Tec", "Crd", "Cpt"], "已导入共享课程")
-        self.inbound_tree = self.create_treeview(right, ["source_college", "Sno", "Snn", "Cno", "Cnn", "term_name", "status"], "外院学生选修本院课程")
+        self.shared_course_columns = list(COURSE_COLS)
+        self.inbound_columns = list(SC_COLS)
+        self.shared_course_tree = self.create_treeview(
+            right,
+            self.shared_course_columns,
+            "已导入共享课程（提交字段：course 表）",
+        )
+        self.inbound_tree = self.create_treeview(
+            right,
+            self.inbound_columns,
+            "外院学生选修本院课程（提交字段：sc 表）",
+        )
 
     def build_integration_tab(self):
         wrapper = tk.Frame(self.tab_integration, bg="#f7fafc")
@@ -579,16 +458,27 @@ class SystemCApp:
         box.columnconfigure(1, weight=1)
         box.rowconfigure(6, weight=1)
 
-    def create_treeview(self, parent, columns, title):
+    def create_treeview(self, parent, columns, title, height=8):
         outer = tk.Frame(parent, bg="white", bd=1, relief="solid")
         outer.pack(fill="both", expand=True, padx=8, pady=8)
         tk.Label(outer, text=title, font=("STSong", 14, "bold"), bg="white", fg="#183b56").pack(anchor="w", padx=12, pady=(10, 6))
-        tree = ttk.Treeview(outer, columns=columns, show="headings", height=8)
+        tree = ttk.Treeview(outer, columns=columns, show="headings", height=height)
         for col in columns:
             tree.heading(col, text=col)
             tree.column(col, anchor="center", width=120)
         tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         return tree
+
+    def action_seed_sc_only(self):
+        try:
+            count = self.db.seed_sc_from_existing()
+            if count == 0:
+                messagebox.showwarning("无法补全", "请先确保学生表、课程表已有本组数据。")
+                return
+            messagebox.showinfo("补全成功", f"已写入选课表 sc 共 {count} 条记录。")
+            self.refresh_sc_views()
+        except Exception as exc:
+            messagebox.showerror("补全失败", str(exc))
 
     def initialize_demo_data(self):
         try:
@@ -596,7 +486,9 @@ class SystemCApp:
             self.db.initialize_schema()
             self.db.seed_base_data()
             sample_files = self.xml_service.ensure_sample_external_xml()
-            self.log(self.init_text, "已按院系C原始结构初始化：c_accounts / c_students / c_courses / c_sc")
+            self.log(self.init_text, f"已按提交文档初始化 student / course / sc（group_no={GROUP_NO}, dept_no={DEPT_NO}）")
+            self.log(self.init_text, f"选课表 sc 示例：{self.db.count_sc_records()} 条（50 名学生 × 每人 5 门课）")
+            self.log(self.init_text, "前 15 名学生已填入示例成绩 score，其余为空表示未录入。")
             for path in sample_files:
                 self.log(self.init_text, f"已生成示例统计XML：{path}")
             self.refresh_all_views()
@@ -663,7 +555,7 @@ class SystemCApp:
             self.refresh_all_views()
         except Exception as exc:
             hint = ""
-            if "Unknown column 'Cno'" in str(exc):
+            if "Unknown column" in str(exc):
                 hint = "\n\n请在「初始化」页重新点击「初始化示例数据」以重建数据库表。"
             messagebox.showerror("拉取课程失败", f"{exc}{hint}")
 
@@ -680,12 +572,7 @@ class SystemCApp:
             self.db.add_cross_college_enrollment(student_id, source_college, course_id, TERM)
             try:
                 client = self.get_integration_client()
-                student_xml = {
-                    "Sno": student_id,
-                    "Snm": student["Snn"],
-                    "Sex": student["Sex"],
-                    "Sde": student["Sde"],
-                }
+                student_xml = student_to_integration_xml(student)
                 code, msg = client.choose_course(student_xml, course_id, source_college)
                 if code != "200":
                     raise RuntimeError(msg or f"集成服务器返回 Code={code}")
@@ -743,13 +630,13 @@ class SystemCApp:
             self.log(self.drop_log, f"已完成退选：{student_id} - {course_id}")
             if source_college != COLLEGE_C:
                 try:
-                    student = self.db.get_student_profile(student_id) or {"Snn": "", "Sex": "", "Sde": ""}
-                    student_xml = {
-                        "Sno": student_id,
-                        "Snm": student.get("Snn", ""),
-                        "Sex": student.get("Sex", ""),
-                        "Sde": student.get("Sde", ""),
-                    }
+                    student = self.db.get_student_profile(student_id) or {}
+                    student_xml = student_to_integration_xml({
+                        "student_id": student_id,
+                        "student_name": student.get("student_name", ""),
+                        "gender": student.get("gender", ""),
+                        "department": student.get("department", ""),
+                    })
                     code, msg = self.get_integration_client().drop_course(
                         student_xml, course_id, source_college
                     )
@@ -767,24 +654,142 @@ class SystemCApp:
             messagebox.showerror("退选失败", str(exc))
 
     def on_tab_changed(self, event=None):
-        if not self.user_info or self.user_info.get("role") != "admin":
+        if not self.user_info:
             return
         try:
             widget = self.notebook.nametowidget(self.notebook.select())
-            if widget == self.tab_xml:
+            if self.user_info.get("role") == "admin" and widget == self.tab_xml:
                 self.refresh_imported_views()
+            elif self.user_info.get("role") != "admin" and widget == self.tab_courses:
+                self.db.ensure_sc_sample_data()
+                self.refresh_student_courses()
         except Exception:
             pass
+
+    def on_data_tab_changed(self, event=None):
+        if not self.user_info or self.user_info.get("role") != "admin":
+            return
+        try:
+            widget = self.data_notebook.nametowidget(self.data_notebook.select())
+            if widget == self.tab_sc:
+                self.db.ensure_sc_sample_data()
+                self.refresh_sc_views()
+            elif widget == self.tab_course:
+                self.refresh_course_views()
+        except Exception:
+            pass
+
+    def refresh_course_views(self):
+        if self.user_info.get("role") != "admin":
+            return
+        try:
+            rows = self.db.get_courses()
+            self.populate_tree(self.course_tree, rows, self.course_columns)
+            shared_cnt = sum(1 for row in rows if str(row.get("share_flag", "")).upper() == "Y")
+            if hasattr(self, "course_share_status_label"):
+                self.course_share_status_label.config(
+                    text=f"共 {len(rows)} 门课程，其中 {shared_cnt} 门对外共享（share_flag=Y）"
+                )
+        except Exception as exc:
+            if hasattr(self, "course_share_status_label"):
+                self.course_share_status_label.config(text=f"加载失败：{exc}")
+
+    def on_course_tree_select(self, event=None):
+        if self.user_info.get("role") != "admin":
+            return
+        selected = self.course_tree.selection()
+        if not selected or not hasattr(self, "course_share_status_label"):
+            return
+        values = self.course_tree.item(selected[0], "values")
+        if not values:
+            return
+        course_id, course_name = values[0], values[1]
+        share_flag = values[5] if len(values) > 5 else ""
+        shared_text = "对外共享" if str(share_flag).upper() == "Y" else "不共享（仅本院）"
+        rows = self.db.get_courses()
+        shared_cnt = sum(1 for row in rows if str(row.get("share_flag", "")).upper() == "Y")
+        self.course_share_status_label.config(
+            text=f"已选：{course_id} {course_name} | 当前 {shared_text} | 全院共 {len(rows)} 门，{shared_cnt} 门共享"
+        )
+
+    def action_set_course_share(self, share_flag: str):
+        if self.user_info.get("role") != "admin":
+            return
+        selected = self.course_tree.selection()
+        if not selected:
+            messagebox.showwarning("未选择课程", "请先在课程表中选中一门课程。")
+            return
+        values = self.course_tree.item(selected[0], "values")
+        course_id = values[0]
+        course_name = values[1] if len(values) > 1 else course_id
+        flag_label = "对外共享 (Y)" if share_flag.upper() == "Y" else "不共享 (N)"
+        if not messagebox.askyesno("确认修改", f"将课程 {course_id}（{course_name}）设为{flag_label}？"):
+            return
+        try:
+            self.db.set_course_share_flag(course_id, share_flag)
+            self.refresh_course_views()
+            messagebox.showinfo("设置成功", f"课程 {course_id} 已设为{flag_label}。")
+        except Exception as exc:
+            messagebox.showerror("设置失败", str(exc))
+
+    def on_sc_tree_select(self, event=None):
+        if self.user_info.get("role") != "admin":
+            return
+        selected = self.sc_tree.selection()
+        if not selected or not hasattr(self, "sc_status_label"):
+            return
+        values = self.sc_tree.item(selected[0], "values")
+        if len(values) < 3:
+            return
+        course_id, student_id, score = values[0], values[1], values[2]
+        score_text = "未录入" if score == "" else ("已退选" if str(score) == "-1" else str(score))
+        self.sc_status_label.config(text=f"已选：学号 {student_id} | 课程 {course_id} | 成绩 {score_text}")
+
+    def action_edit_sc_score(self):
+        if self.user_info.get("role") != "admin":
+            return
+        selected = self.sc_tree.selection()
+        if not selected:
+            messagebox.showwarning("未选择记录", "请先在选课表中选中一条记录。")
+            return
+        values = self.sc_tree.item(selected[0], "values")
+        if len(values) < 3:
+            messagebox.showwarning("数据无效", "所选记录格式不正确。")
+            return
+        course_id, student_id, current_score = values[0], values[1], values[2]
+        dialog = ScoreEditDialog(self.root, student_id, course_id, current_score)
+        self.root.wait_window(dialog.top)
+        if dialog.result is None:
+            return
+        try:
+            self.db.set_sc_score(student_id, course_id, dialog.result)
+            self.refresh_sc_views()
+            messagebox.showinfo("修改成功", f"已更新 {student_id} 的 {course_id} 成绩。")
+        except Exception as exc:
+            messagebox.showerror("修改失败", str(exc))
+
+    def refresh_sc_views(self):
+        if self.user_info.get("role") != "admin":
+            return
+        try:
+            self.db.cleanup_sc_duplicates()
+            rows = self.db.get_sc_submission_rows()
+            self.populate_tree(self.sc_tree, rows, self.sc_columns)
+            if hasattr(self, "sc_status_label"):
+                self.sc_status_label.config(
+                    text=f"当前共 {len(rows)} 条本院选课（group_no={GROUP_NO}, dept_no={DEPT_NO}）"
+                )
+        except Exception as exc:
+            if hasattr(self, "sc_status_label"):
+                self.sc_status_label.config(text=f"加载失败：{exc}")
 
     def refresh_imported_views(self):
         """仅刷新 XML 集成页的外院课程相关表格（避免被其它查询错误连带跳过）。"""
         if self.user_info.get("role") != "admin":
             return
-        shared_cols = ["source_college", "Cno", "Cnn", "Tec", "Crd", "Cpt"]
-        inbound_cols = ["source_college", "Sno", "Snn", "Cno", "Cnn", "term_name", "status"]
         try:
             shared_rows = self.db.get_imported_shared_courses()
-            self.populate_tree(self.shared_course_tree, shared_rows, shared_cols)
+            self.populate_tree(self.shared_course_tree, shared_rows, self.shared_course_columns)
             if hasattr(self, "xml_log"):
                 self.log(self.xml_log, f"已导入共享课程：{len(shared_rows)} 门。")
         except Exception as exc:
@@ -794,7 +799,7 @@ class SystemCApp:
             self.populate_tree(
                 self.inbound_tree,
                 self.db.get_inbound_cross_enrollments(),
-                inbound_cols,
+                self.inbound_columns,
             )
         except Exception as exc:
             if hasattr(self, "xml_log"):
@@ -802,20 +807,28 @@ class SystemCApp:
 
     def refresh_all_views(self):
         if self.user_info["role"] == "admin":
-            self._safe_populate(self.student_tree, self.db.get_students, ["Sno", "Snn", "Sex", "Sde", "Pwd"])
-            self._safe_populate(self.course_tree, self.db.get_courses, ["Cno", "Cnn", "Crd", "Cpt", "Tec", "Pla", "Share"])
+            self.db.ensure_sc_sample_data()
             self._safe_populate(
-                self.enrollment_tree,
-                self.db.get_enrollments,
-                ["Sno", "Snn", "Cno", "Cnn", "source_college", "term_name", "status"],
+                self.student_tree,
+                self.db.get_students,
+                ["student_id", "student_name", "gender", "department", "account", "password", "group_no", "dept_no"],
             )
+            self.refresh_course_views()
+            self.refresh_sc_views()
             self.refresh_imported_views()
         else:
             try:
+                self.db.ensure_sc_sample_data()
+            except Exception as exc:
+                messagebox.showwarning("数据加载失败", f"选课数据检查失败：{exc}")
+            try:
                 self.refresh_student_profile()
+            except Exception as exc:
+                messagebox.showwarning("数据加载失败", f"个人信息加载失败：{exc}")
+            try:
                 self.refresh_student_courses()
-            except Exception:
-                pass
+            except Exception as exc:
+                messagebox.showwarning("数据加载失败", f"课程信息加载失败：{exc}")
         try:
             self.refresh_stats()
         except Exception:
@@ -838,9 +851,12 @@ class SystemCApp:
         self.student_sex_var = tk.StringVar()
         self.student_dept_var = tk.StringVar()
         self.student_pwd_var = tk.StringVar()
-        for idx, (label, var) in enumerate([("姓名", self.student_name_var), ("性别", self.student_sex_var), ("院系", self.student_dept_var), ("密码", self.student_pwd_var)]):
+        for idx, (label, var) in enumerate([("姓名", self.student_name_var), ("性别", self.student_sex_var), ("密码", self.student_pwd_var)]):
             tk.Label(form, text=label, bg="white").grid(row=idx, column=0, sticky="e", padx=8, pady=8)
             tk.Entry(form, textvariable=var, width=28).grid(row=idx, column=1, sticky="w", padx=8, pady=8)
+        tk.Label(form, text="院系", bg="white").grid(row=3, column=0, sticky="e", padx=8, pady=8)
+        tk.Label(form, text=COLLEGE_DEPARTMENT, bg="white", fg="#4b5563").grid(row=3, column=1, sticky="w", padx=8, pady=8)
+        self.student_dept_var.set(COLLEGE_DEPARTMENT)
         ttk.Button(form, text="保存个人信息", command=self.save_student_profile).grid(row=4, column=1, sticky="w", padx=8, pady=10)
         self.profile_text = tk.Text(box, height=10, bg="#0f172a", fg="#dbeafe")
         self.profile_text.pack(fill="both", expand=True, padx=20, pady=(0, 20))
@@ -850,15 +866,31 @@ class SystemCApp:
         frame.pack(fill="both", expand=True, padx=10, pady=10)
         action_box = tk.Frame(frame, bg="white", bd=1, relief="solid")
         action_box.pack(fill="x", padx=8, pady=8)
+
+        local_row = tk.Frame(action_box, bg="white")
+        local_row.pack(fill="x", padx=16, pady=(12, 6))
         self.local_course_var = tk.StringVar()
-        tk.Label(action_box, text="本院开放课程", bg="white").pack(side="left", padx=(16, 8), pady=12)
-        self.local_course_box = ttk.Combobox(action_box, textvariable=self.local_course_var, state="readonly", width=28)
+        tk.Label(local_row, text="本院课程", bg="white").pack(side="left", padx=(0, 8))
+        self.local_course_box = ttk.Combobox(local_row, textvariable=self.local_course_var, state="readonly", width=32)
         self.local_course_box.pack(side="left", padx=8)
-        ttk.Button(action_box, text="选择课程", command=self.select_local_course).pack(side="left", padx=8)
-        ttk.Button(action_box, text="退选所选课程", command=self.drop_selected_course).pack(side="left", padx=8)
+        ttk.Button(local_row, text="选择本院课程", command=self.select_local_course).pack(side="left", padx=8)
+
+        external_row = tk.Frame(action_box, bg="white")
+        external_row.pack(fill="x", padx=16, pady=(6, 12))
+        self.external_course_var = tk.StringVar()
+        tk.Label(external_row, text="外院共享课程", bg="white").pack(side="left", padx=(0, 8))
+        self.external_course_box = ttk.Combobox(external_row, textvariable=self.external_course_var, state="readonly", width=32)
+        self.external_course_box.pack(side="left", padx=8)
+        ttk.Button(external_row, text="选择外院课程", command=self.select_external_course).pack(side="left", padx=8)
+        ttk.Button(external_row, text="退选所选课程", command=self.drop_selected_course).pack(side="left", padx=8)
+
         self.course_tip = tk.Label(action_box, text="", bg="white", fg="#4b5563")
-        self.course_tip.pack(side="right", padx=16)
-        self.student_course_tree = self.create_treeview(frame, ["Cno", "Cnn", "source_college", "term_name", "status"], "我的课程信息")
+        self.course_tip.pack(anchor="e", padx=16, pady=(0, 12))
+        self.student_course_tree = self.create_treeview(
+            frame,
+            ["course_id", "course_name", "score", "source_college", "status"],
+            "我的课程信息（含本院与跨院）",
+        )
 
     def build_student_stats_tab(self):
         wrapper = tk.Frame(self.tab_stats, bg="#f7fafc")
@@ -870,19 +902,20 @@ class SystemCApp:
         self.student_stats_text.pack(fill="both", expand=True, padx=18, pady=(0, 18))
 
     def refresh_student_profile(self):
+        self.db.normalize_student_departments()
         row = self.db.get_student_profile(self.user_info["account"])
         if not row:
             return
-        self.student_name_var.set(row["Snn"])
-        self.student_sex_var.set(row["Sex"])
-        self.student_dept_var.set(row["Sde"])
-        self.student_pwd_var.set(row["Pwd"])
+        self.student_name_var.set(row["student_name"])
+        self.student_sex_var.set(row["gender"])
+        self.student_dept_var.set(COLLEGE_DEPARTMENT)
+        self.student_pwd_var.set(row["password"])
         self.profile_text.delete("1.0", tk.END)
-        self.profile_text.insert(tk.END, f"学号：{row['Sno']}\n")
-        self.profile_text.insert(tk.END, f"姓名：{row['Snn']}\n")
-        self.profile_text.insert(tk.END, f"性别：{row['Sex']}\n")
-        self.profile_text.insert(tk.END, f"院系：{row['Sde']}\n")
-        self.profile_text.insert(tk.END, f"登录密码：{row['Pwd']}\n")
+        self.profile_text.insert(tk.END, f"学号：{row['student_id']}\n")
+        self.profile_text.insert(tk.END, f"姓名：{row['student_name']}\n")
+        self.profile_text.insert(tk.END, f"性别：{row['gender']}\n")
+        self.profile_text.insert(tk.END, f"院系：{COLLEGE_DEPARTMENT}\n")
+        self.profile_text.insert(tk.END, f"登录密码：{row['password']}\n")
 
     def save_student_profile(self):
         try:
@@ -890,7 +923,7 @@ class SystemCApp:
                 self.user_info["account"],
                 self.student_name_var.get().strip(),
                 self.student_sex_var.get().strip(),
-                self.student_dept_var.get().strip(),
+                COLLEGE_DEPARTMENT,
                 self.student_pwd_var.get().strip(),
             )
             self.user_info["name"] = self.student_name_var.get().strip() or self.user_info["name"]
@@ -900,21 +933,39 @@ class SystemCApp:
             messagebox.showerror("保存失败", str(exc))
 
     def refresh_student_courses(self):
-        all_rows = self.db.get_enrollments()
-        rows = [row for row in all_rows if row.get("Sno") == self.user_info["account"]]
-        self.populate_tree(self.student_course_tree, rows, ["Cno", "Cnn", "source_college", "term_name", "status"])
-        options = [f"{row['Cno']} | {row['Cnn']}" for row in self.db.get_local_selectable_courses()]
-        self.local_course_box["values"] = options
-        if options and not self.local_course_var.get():
+        student_id = self.user_info.get("student_id") or self.user_info["account"]
+        rows = self.db.get_student_enrollments(student_id)
+        self.populate_tree(
+            self.student_course_tree,
+            rows,
+            ["course_id", "course_name", "score", "source_college", "status"],
+        )
+        local_options = [f"{row['course_id']} | {row['course_name']}" for row in self.db.get_local_selectable_courses()]
+        self.local_course_box["values"] = local_options
+        if local_options and not self.local_course_var.get():
             self.local_course_box.current(0)
-        limit = self.db.get_student_course_limit(self.user_info["account"])
-        current = self.db.count_student_active_courses(self.user_info["account"])
-        self.course_tip.config(text=f"当前已选 {current} / {limit} 门")
+
+        external_rows = self.db.get_selectable_imported_courses(student_id)
+        external_options = [
+            f"{row['source_college']} | {row['course_id']} | {row['course_name']}" for row in external_rows
+        ]
+        self.external_course_box["values"] = external_options
+        if external_options and not self.external_course_var.get():
+            self.external_course_box.current(0)
+        elif not external_options:
+            self.external_course_var.set("")
+
+        limit = self.db.get_student_course_limit(student_id)
+        local_count = self.db.count_student_local_courses(student_id)
+        cross_count = self.db.count_student_cross_courses(student_id)
+        self.course_tip.config(
+            text=f"本院已选 {local_count} / {limit} 门 | 跨院已选 {cross_count} 门（5 门上限仅计本院）"
+        )
 
     def select_local_course(self):
         value = self.local_course_var.get().strip()
         if not value:
-            messagebox.showwarning("未选择课程", "请先选择一门本院开放课程。")
+            messagebox.showwarning("未选择课程", "请先选择一门本院课程。")
             return
         course_id = value.split(" | ", 1)[0]
         try:
@@ -925,24 +976,50 @@ class SystemCApp:
         except Exception as exc:
             messagebox.showerror("选课失败", str(exc))
 
+    def select_external_course(self):
+        value = self.external_course_var.get().strip()
+        if not value:
+            messagebox.showwarning("未选择课程", "请先在「外院共享课程」中选择一门已导入的课程；若列表为空请由管理员导入外院共享课程。")
+            return
+        parts = value.split(" | ", 2)
+        if len(parts) < 3:
+            messagebox.showwarning("格式错误", "外院课程选项格式无效。")
+            return
+        source_college, course_id, course_name = parts[0], parts[1], parts[2]
+        student_id = self.user_info.get("student_id") or self.user_info["account"]
+        try:
+            self.db.add_cross_college_enrollment(student_id, source_college, course_id, TERM)
+            try:
+                student = self.db.get_student_profile(student_id)
+                if student:
+                    code, msg = self.get_integration_client().choose_course(
+                        student_to_integration_xml(student),
+                        course_id,
+                        source_college,
+                    )
+                    if code != "200":
+                        raise RuntimeError(msg or f"集成服务器返回 Code={code}")
+            except Exception:
+                pass
+            self.refresh_student_courses()
+            messagebox.showinfo("选课成功", f"已选修外院 {source_college} 课程 {course_id}（{course_name}）。")
+        except Exception as exc:
+            messagebox.showerror("选课失败", str(exc))
+
     def drop_selected_course(self):
         selected = self.student_course_tree.selection()
         if not selected:
             messagebox.showwarning("未选择课程", "请先在列表中选择一门课程。")
             return
         values = self.student_course_tree.item(selected[0], "values")
-        course_id, source_college = values[0], values[2]
+        course_id, source_college = values[0], values[3]
         try:
             self.db.drop_enrollment(self.user_info["account"], course_id, source_college, TERM)
             if source_college != COLLEGE_C:
                 try:
                     profile = self.db.get_student_profile(self.user_info["account"]) or {}
-                    student_xml = {
-                        "Sno": self.user_info["account"],
-                        "Snm": profile.get("Snn", self.user_info.get("name", "")),
-                        "Sex": profile.get("Sex", ""),
-                        "Sde": profile.get("Sde", ""),
-                    }
+                    student_xml = student_to_integration_xml(profile)
+                    student_xml["Sno"] = self.user_info["account"]
                     self.get_integration_client().drop_course(
                         student_xml, course_id, source_college
                     )
@@ -1023,6 +1100,33 @@ class SystemCApp:
             child.destroy()
 
 
+class ScoreEditDialog:
+    def __init__(self, parent, student_id: str, course_id: str, current_score: str):
+        self.result = None
+        self.top = tk.Toplevel(parent)
+        self.top.title("修改选课成绩")
+        self.top.geometry("420x240")
+        self.top.grab_set()
+
+        display_score = "未录入" if current_score == "" else str(current_score)
+        tk.Label(self.top, text=f"学号：{student_id}").pack(anchor="w", padx=20, pady=(18, 4))
+        tk.Label(self.top, text=f"课程：{course_id}").pack(anchor="w", padx=20, pady=4)
+        tk.Label(self.top, text=f"当前成绩：{display_score}").pack(anchor="w", padx=20, pady=4)
+        tk.Label(self.top, text="新成绩（0-100；留空=未录入；-1=退选并删除记录）", fg="#4b5563").pack(anchor="w", padx=20, pady=(12, 6))
+
+        self.score_var = tk.StringVar(value="" if current_score is None else str(current_score))
+        tk.Entry(self.top, textvariable=self.score_var, width=16).pack(anchor="w", padx=20)
+
+        btn_row = tk.Frame(self.top)
+        btn_row.pack(pady=20)
+        ttk.Button(btn_row, text="确认", command=self.confirm).pack(side="left", padx=8)
+        ttk.Button(btn_row, text="取消", command=self.top.destroy).pack(side="left", padx=8)
+
+    def confirm(self):
+        self.result = self.score_var.get().strip()
+        self.top.destroy()
+
+
 class ChoiceDialog:
     def __init__(self, parent, db):
         self.db = db
@@ -1035,9 +1139,9 @@ class ChoiceDialog:
         self.student_var = tk.StringVar()
         self.course_var = tk.StringVar()
 
-        students = [row["Sno"] for row in self.db.get_students()]
-        shared = self.db.get_imported_shared_courses()
-        courses = [f"{row['source_college']}|{row['Cno']}|{row['Cnn']}" for row in shared]
+        students = [row["student_id"] for row in self.db.get_students() if row.get("account") != "admin"]
+        shared = self.db.get_imported_shared_course_refs()
+        courses = [f"{row['source_college']}|{row['course_id']}|{row['course_name']}" for row in shared]
 
         tk.Label(self.top, text="学生学号").pack(anchor="w", padx=20, pady=(20, 6))
         student_box = ttk.Combobox(self.top, textvariable=self.student_var, values=students, state="readonly")

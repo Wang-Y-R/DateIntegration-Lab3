@@ -9,7 +9,7 @@ from typing import Any
 import requests
 from flask import Flask, Response, jsonify, request
 
-COLLEGE_C = "C"
+from db_schema import COLLEGE_C, DEPT_NO, GROUP_NO
 DEFAULT_INTEGRATION_URL = "http://localhost:8080"
 DEFAULT_PROVIDER_PORT = 8083
 
@@ -33,12 +33,12 @@ def courses_to_internal_xml(courses: list[dict[str, Any]]) -> str:
     parts = ["<Classes>"]
     for row in courses:
         parts.append("<class>")
-        parts.append(f"<Cno>{row.get('Cno', '')}</Cno>")
-        parts.append(f"<Cnm>{row.get('Cnn', row.get('Cnm', ''))}</Cnm>")
-        parts.append(f"<Ctm>{row.get('Cpt', row.get('Ctm', 0))}</Ctm>")
-        parts.append(f"<Cpt>{row.get('Crd', row.get('Cpt', 0))}</Cpt>")
-        parts.append(f"<Tec>{row.get('Tec', '')}</Tec>")
-        parts.append(f"<Pla>{row.get('Pla', '')}</Pla>")
+        parts.append(f"<Cno>{row.get('course_id', row.get('Cno', ''))}</Cno>")
+        parts.append(f"<Cnm>{row.get('course_name', row.get('Cnn', row.get('Cnm', '')))}</Cnm>")
+        parts.append(f"<Ctm>{row.get('class_hours', row.get('Cpt', row.get('Ctm', 0)))}</Ctm>")
+        parts.append(f"<Cpt>{row.get('credit', row.get('Crd', row.get('Cpt', 0)))}</Cpt>")
+        parts.append(f"<Tec>{row.get('teacher_name', row.get('Tec', ''))}</Tec>")
+        parts.append(f"<Pla>{row.get('location', row.get('Pla', ''))}</Pla>")
         parts.append("<Share>Y</Share>")
         parts.append("</class>")
     parts.append("</Classes>")
@@ -234,17 +234,21 @@ class IntegrationClient:
 
 def integrated_course_to_import_row(course: dict[str, Any]) -> dict[str, Any]:
     college = str(course.get("source_college", course.get("college", course.get("ccollege", "")))).upper()
-    cno = str(course.get("Cno", course.get("cid", course.get("id", ""))))
+    course_id = str(course.get("course_id", course.get("Cno", course.get("cid", course.get("id", "")))))
     if not college or college == "UNKNOWN":
-        college = infer_source_college(cno)
+        college = infer_source_college(course_id)
+    credit = course.get("credit", course.get("Crd", course.get("Cpt", course.get("ccredit", "0"))))
+    class_hours = course.get("class_hours", course.get("Ctm", course.get("Cpt", course.get("hour", "16"))))
     return {
         "source_college": college,
-        "Cno": cno,
-        "Cnn": str(course.get("Cnn", course.get("Cnm", course.get("cname", course.get("name", ""))))),
-        "Crd": int(course.get("Crd", course.get("Cpt", course.get("credit", course.get("ccredit", 0))))),
-        "Cpt": int(course.get("Cpt", course.get("Ctm", course.get("hour", course.get("chour", 16))))),
-        "Tec": str(course.get("Tec", course.get("teacher", "待定"))),
-        "Pla": str(course.get("Pla", course.get("place", "待定"))),
+        "course_id": course_id,
+        "course_name": str(
+            course.get("course_name", course.get("Cnn", course.get("Cnm", course.get("cname", course.get("name", "")))))
+        ),
+        "credit": str(credit),
+        "class_hours": str(class_hours),
+        "teacher_name": str(course.get("teacher_name", course.get("Tec", course.get("teacher", "待定")))),
+        "location": str(course.get("location", course.get("Pla", course.get("place", "待定")))),
     }
 
 
@@ -287,17 +291,29 @@ class IntegrationProviderServer:
                     source_college = "UNKNOWN"
 
             course_rows = self.db.execute(
-                "SELECT Cnn FROM c_courses WHERE Cno=%s",
-                (choice["Cno"],),
+                "SELECT course_name, share_flag FROM course WHERE course_id=%s AND dept_no=%s AND group_no=%s",
+                (choice["Cno"], COLLEGE_C, GROUP_NO),
                 fetch=True,
             )
-            cnn = course_rows[0]["Cnn"] if course_rows else choice["Cno"]
+            if not course_rows:
+                return Response(
+                    build_xml_response(400, "课程不存在"),
+                    status=400,
+                    mimetype="application/xml; charset=utf-8",
+                )
+            if str(course_rows[0].get("share_flag", "")).upper() != "Y":
+                return Response(
+                    build_xml_response(400, "该课程未对外共享，外院学生无法选修"),
+                    status=400,
+                    mimetype="application/xml; charset=utf-8",
+                )
+            course_name = course_rows[0]["course_name"]
             row = {
                 "source_college": source_college,
-                "Sno": choice["Sno"],
-                "Snn": student.get("Snn", ""),
-                "Cno": choice["Cno"],
-                "Cnn": cnn,
+                "student_id": choice["Sno"],
+                "student_name": student.get("Snn", ""),
+                "course_id": choice["Cno"],
+                "course_name": course_name,
                 "term_name": "2025-2026-2",
                 "status": "跨校已选",
             }
@@ -327,8 +343,8 @@ class IntegrationProviderServer:
 
             updated = self.db.execute(
                 "UPDATE inbound_cross_enrollments SET status='已退选' "
-                "WHERE Sno=%s AND Cno=%s",
-                (choice["Sno"], choice["Cno"]),
+                "WHERE student_id=%s AND course_id=%s AND dept_no=%s AND group_no=%s",
+                (choice["Cno"], choice["Sno"], DEPT_NO, GROUP_NO),
             )
             if updated == 0:
                 return Response(
