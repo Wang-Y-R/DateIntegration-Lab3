@@ -5,7 +5,7 @@ from tkinter import filedialog, messagebox, ttk
 from xml.dom import minidom
 import xml.etree.ElementTree as ET
 
-from db import Database, TERM
+from db import Database, TERM, infer_college_from_id, is_local_course, is_sc_score_editable
 from db_schema import COLLEGE_C, COLLEGE_DEPARTMENT, COURSE_COLS, DB_CONFIG, DEPT_NO, GROUP_NO, SC_COLS
 from integration_api import (
     DEFAULT_INTEGRATION_URL,
@@ -64,38 +64,55 @@ class XmlService:
         root = ET.parse(path).getroot()
         source_college = root.attrib.get('college', 'UNKNOWN')
         rows = []
-        for node in root.findall('course'):
+        nodes = list(root.findall('course')) + list(root.findall('class'))
+        for node in nodes:
+            course_id = (
+                node.findtext('course_id', '')
+                or node.findtext('Cno', '')
+                or node.findtext('编号', '')
+            ).strip()
+            if not course_id:
+                continue
             rows.append({
-                'source_college': source_college,
-                'course_id': node.findtext('course_id', node.findtext('Cno', '')),
-                'course_name': node.findtext('course_name', node.findtext('Cnn', '')),
-                'credit': node.findtext('credit', node.findtext('Crd', '0')),
-                'class_hours': node.findtext('class_hours', node.findtext('Cpt', '16')),
+                'source_college': source_college if source_college != 'UNKNOWN' else infer_college_from_id(course_id),
+                'course_id': course_id,
+                'course_name': (
+                    node.findtext('course_name', '')
+                    or node.findtext('Cnn', '')
+                    or node.findtext('Cnm', '')
+                    or node.findtext('名称', '')
+                    or course_id
+                ),
+                'credit': node.findtext('credit', node.findtext('Crd', node.findtext('Cpt', '0'))),
+                'class_hours': node.findtext('class_hours', node.findtext('Ctm', node.findtext('Cpt', '16'))),
                 'teacher_name': node.findtext('teacher_name', node.findtext('Tec', '')),
                 'location': node.findtext('location', node.findtext('Pla', '')),
             })
+        if not rows:
+            raise ValueError("XML 中未找到 course/class 课程节点。")
         self.db.import_shared_courses(rows, str(path))
         return source_college, len(rows)
 
     def export_local_cross_selections(self):
-        dept, group = DEPT_NO, GROUP_NO
-        rows = self.db.execute(
-            "SELECT cs.source_college, s.student_id, s.student_name, cs.course_id, i.course_name, "
-            "cs.term_name, cs.status FROM cross_college_selections cs "
-            "JOIN student s ON s.student_id=cs.student_id AND s.dept_no=cs.dept_no AND s.group_no=cs.group_no "
-            "JOIN imported_shared_courses i ON i.source_college=cs.source_college AND i.course_id=cs.course_id "
-            "AND i.dept_no=cs.dept_no AND i.group_no=cs.group_no "
-            "WHERE cs.dept_no=%s AND cs.group_no=%s ORDER BY cs.source_college, s.student_id",
-            (dept, group),
-            fetch=True,
-        )
+        rows = self.db.get_outbound_cross_enrollments()
         paths = []
-        for college in sorted({r['source_college'] for r in rows}):
+        colleges = sorted(
+            {
+                infer_college_from_id(r["course_id"])
+                for r in rows
+                if infer_college_from_id(r["course_id"]) != COLLEGE_C
+            }
+        )
+        for college in colleges:
             root = ET.Element('crossCollegeSelections', attrib={'fromCollege': COLLEGE_C, 'toCollege': college, 'term': TERM})
-            for row in [r for r in rows if r['source_college'] == college]:
+            for row in [r for r in rows if infer_college_from_id(r["course_id"]) == college]:
                 node = ET.SubElement(root, 'selection')
-                for key in ('student_id', 'student_name', 'course_id', 'course_name', 'term_name', 'status'):
-                    ET.SubElement(node, key).text = str(row[key])
+                ET.SubElement(node, 'student_id').text = str(row['student_id'])
+                ET.SubElement(node, 'student_name').text = str(row.get('student_name', ''))
+                ET.SubElement(node, 'course_id').text = str(row['course_id'])
+                ET.SubElement(node, 'course_name').text = str(row.get('course_name', ''))
+                ET.SubElement(node, 'term_name').text = TERM
+                ET.SubElement(node, 'status').text = '已选'
             paths.append(self.write_xml(root, EXPORT_DIR / f"college_c_to_{college.lower()}_selections.xml"))
         return paths
 
@@ -301,7 +318,8 @@ class SystemCApp:
 
         tk.Label(
             tab_course,
-            text="说明：share_flag=Y 表示对外共享（外院可通过集成选课）；N 表示不共享（仅本院学生可选）。",
+            text="说明：course 表显示本院全部课程 + 外院 share_flag=Y 的共享课；"
+            "share_flag 仅可对本院课程（C 开头）设置是否对外共享。",
             bg="#f7fafc",
             fg="#4b5563",
             wraplength=900,
@@ -338,7 +356,9 @@ class SystemCApp:
 
         tk.Label(
             tab_sc,
-            text="说明：本表仅限本院学生选修本院课程，数据写入提交库 hw4 的 sc 表；跨院选课请见「XML集成」。",
+            text="说明：本表含全部选课记录；dept_no 为课程所属院系。"
+            "「修改成绩」仅对本院课程生效（本院生选本院课、外院生选本院课），"
+            "本院生选外院课的成绩由开课院系管理。",
             bg="#f7fafc",
             fg="#b45309",
             wraplength=900,
@@ -392,12 +412,12 @@ class SystemCApp:
         self.shared_course_tree = self.create_treeview(
             right,
             self.shared_course_columns,
-            "已导入共享课程（提交字段：course 表）",
+            "已导入共享课程（course 表，外院课程编号）",
         )
         self.inbound_tree = self.create_treeview(
             right,
             self.inbound_columns,
-            "外院学生选修本院课程（提交字段：sc 表）",
+            "外院学生选修本院课程（sc 表）",
         )
 
     def build_integration_tab(self):
@@ -509,6 +529,7 @@ class SystemCApp:
         try:
             college, count = self.xml_service.import_shared_courses(path)
             self.log(self.xml_log, f"已导入{college}学院共享课程 {count} 门：{path}")
+            self.log(self.xml_log, "外院课程已写入 course 表，请到「本院数据 → 课程 course」查看。")
             self.refresh_all_views()
         except Exception as exc:
             messagebox.showerror("导入失败", str(exc))
@@ -545,11 +566,12 @@ class SystemCApp:
                 )
                 return
             rows = [integrated_course_to_import_row(c) for c in courses]
-            self.db.import_shared_courses(rows, f"integration:{self.integration_url}")
-            self.log(self.integration_log, f"已从集成服务器（XML）导入 {len(rows)} 门外院共享课程。")
+            imported = self.db.import_shared_courses(rows, f"integration:{self.integration_url}")
+            self.log(self.integration_log, f"已从集成服务器（XML）导入 {imported} 门外院共享课程。")
             self.log(
                 self.integration_log,
-                "请到「XML集成」页右侧「已导入共享课程」查看；若为空请点该页「刷新导入课程列表」。",
+                "请到「本院数据 → 课程 course」查看（外院课程编号以 A/B 开头）；"
+                "「XML集成」页右侧列表同步更新。",
             )
             self.refresh_imported_views()
             self.refresh_all_views()
@@ -685,10 +707,15 @@ class SystemCApp:
         try:
             rows = self.db.get_courses()
             self.populate_tree(self.course_tree, rows, self.course_columns)
-            shared_cnt = sum(1 for row in rows if str(row.get("share_flag", "")).upper() == "Y")
+            local_cnt = sum(1 for row in rows if is_local_course(row.get("course_id", "")))
+            external_cnt = len(rows) - local_cnt
+            shared_cnt = sum(
+                1 for row in rows
+                if is_local_course(row.get("course_id", "")) and str(row.get("share_flag", "")).upper() == "Y"
+            )
             if hasattr(self, "course_share_status_label"):
                 self.course_share_status_label.config(
-                    text=f"共 {len(rows)} 门课程，其中 {shared_cnt} 门对外共享（share_flag=Y）"
+                    text=f"共 {len(rows)} 门（本院 {local_cnt}，外院导入 {external_cnt}；本院共享 {shared_cnt} 门）"
                 )
         except Exception as exc:
             if hasattr(self, "course_share_status_label"):
@@ -705,11 +732,17 @@ class SystemCApp:
             return
         course_id, course_name = values[0], values[1]
         share_flag = values[5] if len(values) > 5 else ""
-        shared_text = "对外共享" if str(share_flag).upper() == "Y" else "不共享（仅本院）"
         rows = self.db.get_courses()
-        shared_cnt = sum(1 for row in rows if str(row.get("share_flag", "")).upper() == "Y")
+        shared_cnt = sum(
+            1 for row in rows
+            if is_local_course(row.get("course_id", "")) and str(row.get("share_flag", "")).upper() == "Y"
+        )
+        if is_local_course(course_id):
+            shared_text = "对外共享" if str(share_flag).upper() == "Y" else "不共享（仅本院）"
+        else:
+            shared_text = "外院导入（不可改 share_flag）"
         self.course_share_status_label.config(
-            text=f"已选：{course_id} {course_name} | 当前 {shared_text} | 全院共 {len(rows)} 门，{shared_cnt} 门共享"
+            text=f"已选：{course_id} {course_name} | {shared_text} | 共 {len(rows)} 门，本院共享 {shared_cnt} 门"
         )
 
     def action_set_course_share(self, share_flag: str):
@@ -722,6 +755,12 @@ class SystemCApp:
         values = self.course_tree.item(selected[0], "values")
         course_id = values[0]
         course_name = values[1] if len(values) > 1 else course_id
+        if not is_local_course(course_id):
+            messagebox.showwarning(
+                "无法修改",
+                f"课程 {course_id} 为外院导入课程，share_flag 不可修改。\n仅本院课程（C 开头）可设置是否对外共享。",
+            )
+            return
         flag_label = "对外共享 (Y)" if share_flag.upper() == "Y" else "不共享 (N)"
         if not messagebox.askyesno("确认修改", f"将课程 {course_id}（{course_name}）设为{flag_label}？"):
             return
@@ -743,7 +782,13 @@ class SystemCApp:
             return
         course_id, student_id, score = values[0], values[1], values[2]
         score_text = "未录入" if score == "" else ("已退选" if str(score) == "-1" else str(score))
-        self.sc_status_label.config(text=f"已选：学号 {student_id} | 课程 {course_id} | 成绩 {score_text}")
+        if is_sc_score_editable(student_id, course_id):
+            edit_hint = "可修改成绩"
+        else:
+            edit_hint = "外院开课，本院不可改成绩"
+        self.sc_status_label.config(
+            text=f"已选：学号 {student_id} | 课程 {course_id} | 成绩 {score_text} | {edit_hint}"
+        )
 
     def action_edit_sc_score(self):
         if self.user_info.get("role") != "admin":
@@ -757,6 +802,12 @@ class SystemCApp:
             messagebox.showwarning("数据无效", "所选记录格式不正确。")
             return
         course_id, student_id, current_score = values[0], values[1], values[2]
+        if not is_sc_score_editable(student_id, course_id):
+            messagebox.showwarning(
+                "无法修改",
+                f"学号 {student_id} 选修外院课程 {course_id} 的成绩由开课院系管理，本院无法修改。",
+            )
+            return
         dialog = ScoreEditDialog(self.root, student_id, course_id, current_score)
         self.root.wait_window(dialog.top)
         if dialog.result is None:

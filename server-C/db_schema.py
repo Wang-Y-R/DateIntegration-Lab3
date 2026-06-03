@@ -97,52 +97,6 @@ CREATE TABLE IF NOT EXISTS sc (
 )
 """
 
-# 集成过程辅助表（非提交表，按组号隔离）
-CREATE_IMPORTED_SHARED = """
-CREATE TABLE IF NOT EXISTS imported_shared_courses (
-    source_college VARCHAR(5)  NOT NULL,
-    course_id      VARCHAR(8)  NOT NULL,
-    course_name    VARCHAR(30) NOT NULL,
-    credit         VARCHAR(2)  NOT NULL,
-    class_hours    VARCHAR(10) NOT NULL,
-    teacher_name   VARCHAR(20) NOT NULL,
-    location       VARCHAR(30) NOT NULL,
-    xml_path       VARCHAR(255) NOT NULL,
-    group_no       VARCHAR(10) NOT NULL,
-    dept_no        VARCHAR(10) NOT NULL,
-    PRIMARY KEY (source_college, course_id, group_no, dept_no)
-)
-"""
-
-CREATE_CROSS_SELECTIONS = """
-CREATE TABLE IF NOT EXISTS cross_college_selections (
-    source_college VARCHAR(5)  NOT NULL,
-    student_id     VARCHAR(12) NOT NULL,
-    course_id      VARCHAR(8)  NOT NULL,
-    term_name      VARCHAR(30) NOT NULL,
-    status         VARCHAR(20) NOT NULL,
-    group_no       VARCHAR(10) NOT NULL,
-    dept_no        VARCHAR(10) NOT NULL,
-    PRIMARY KEY (source_college, student_id, course_id, term_name, group_no, dept_no)
-)
-"""
-
-CREATE_INBOUND = """
-CREATE TABLE IF NOT EXISTS inbound_cross_enrollments (
-    source_college VARCHAR(5)  NOT NULL,
-    student_id     VARCHAR(12) NOT NULL,
-    student_name   VARCHAR(20) NOT NULL,
-    course_id      VARCHAR(8)  NOT NULL,
-    course_name    VARCHAR(30) NOT NULL,
-    term_name      VARCHAR(30) NOT NULL,
-    status         VARCHAR(20) NOT NULL,
-    xml_path       VARCHAR(255) NOT NULL,
-    group_no       VARCHAR(10) NOT NULL,
-    dept_no        VARCHAR(10) NOT NULL,
-    PRIMARY KEY (source_college, student_id, course_id, term_name, group_no, dept_no)
-)
-"""
-
 LEGACY_TABLES = [
     "c_accounts",
     "c_students",
@@ -150,4 +104,18 @@ LEGACY_TABLES = [
     "c_sc",
 ]
 
-INTEGRATION_DDL = [CREATE_IMPORTED_SHARED, CREATE_CROSS_SELECTIONS, CREATE_INBOUND]
+# 已废弃的集成辅助表（启动时迁移数据到 sc/course 后删除）
+DEPRECATED_INTEGRATION_TABLES = [
+    "imported_shared_courses",
+    "cross_college_selections",
+    "inbound_cross_enrollments",
+]
+
+INTEGRATION_DDL: list[str] = []
+
+# hw4 提交表复合主键（共享库若仅有 course_id 主键会导致外院课程导入写入他院记录）
+SUBMISSION_PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
+    "student": ("student_id", "group_no", "dept_no"),
+    "course": ("course_id", "group_no", "dept_no"),
+    "sc": ("course_id", "student_id", "group_no", "dept_no"),
+}

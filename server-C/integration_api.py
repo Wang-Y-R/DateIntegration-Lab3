@@ -10,6 +10,8 @@ import requests
 from flask import Flask, Response, jsonify, request
 
 from db_schema import COLLEGE_C, DEPT_NO, GROUP_NO
+from db import course_dept_no
+
 DEFAULT_INTEGRATION_URL = "http://localhost:8080"
 DEFAULT_PROVIDER_PORT = 8083
 
@@ -284,14 +286,8 @@ class IntegrationProviderServer:
                     mimetype="application/xml; charset=utf-8",
                 )
 
-            source_college = request.headers.get("SourceSystem") or infer_source_college(choice["Sno"])
-            if source_college == COLLEGE_C:
-                source_college = infer_source_college(choice["Sno"])
-                if source_college == COLLEGE_C:
-                    source_college = "UNKNOWN"
-
             course_rows = self.db.execute(
-                "SELECT course_name, share_flag FROM course WHERE course_id=%s AND dept_no=%s AND group_no=%s",
+                "SELECT share_flag FROM course WHERE course_id=%s AND dept_no=%s AND group_no=%s",
                 (choice["Cno"], COLLEGE_C, GROUP_NO),
                 fetch=True,
             )
@@ -307,15 +303,10 @@ class IntegrationProviderServer:
                     status=400,
                     mimetype="application/xml; charset=utf-8",
                 )
-            course_name = course_rows[0]["course_name"]
             row = {
-                "source_college": source_college,
                 "student_id": choice["Sno"],
-                "student_name": student.get("Snn", ""),
                 "course_id": choice["Cno"],
-                "course_name": course_name,
-                "term_name": "2025-2026-2",
-                "status": "跨校已选",
+                "status": "已选",
             }
             try:
                 self.db.import_inbound_selections([row], "integration-server")
@@ -341,12 +332,11 @@ class IntegrationProviderServer:
                     mimetype="application/xml; charset=utf-8",
                 )
 
-            updated = self.db.execute(
-                "UPDATE inbound_cross_enrollments SET status='已退选' "
-                "WHERE student_id=%s AND course_id=%s AND dept_no=%s AND group_no=%s",
-                (choice["Cno"], choice["Sno"], DEPT_NO, GROUP_NO),
+            deleted = self.db.execute(
+                "DELETE FROM sc WHERE student_id=%s AND course_id=%s AND dept_no=%s AND group_no=%s",
+                (choice["Sno"], choice["Cno"], course_dept_no(choice["Cno"]), GROUP_NO),
             )
-            if updated == 0:
+            if deleted == 0:
                 return Response(
                     build_xml_response(400, "未找到对应选课记录"),
                     status=400,

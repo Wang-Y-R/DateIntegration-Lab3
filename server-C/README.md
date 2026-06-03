@@ -37,7 +37,7 @@ python app.py
 
 ## 集成服务器
 
-与改造前相同：XML 接口 `8080`，Internal API `8083`。集成辅助表（`imported_shared_courses` 等）按 `group_no` 隔离，不影响提交的三张主表结构。
+与改造前相同：XML 接口 `8080`，Internal API `8083`。跨院选课统一写入 `sc` 表；导入的外院共享课程元数据写入 `course` 表（非 C 开头编号）。
 
 ## 环境变量（可选）
 
